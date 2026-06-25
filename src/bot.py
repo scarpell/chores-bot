@@ -92,15 +92,19 @@ async def schedule(ctx):
 
 
 @bot.command(name='swap', help='Swap on call position with chosen person')
-async def swap(ctx, member: discord.Member):
+async def swap(ctx, member: discord.Member = None):
+  if member is None:
+    await ctx.message.channel.send('**Usage:** `!swap @username`\nUse this command to trade your schedule day with someone else!')
+    return
+
   try:
     sch.swap(ctx.message.author, member)
   
     await ctx.message.channel.send('Users have been switched! The new schedule '
                                   'should be as follows:')
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
-  except ValueError:
-    await ctx.message.channel.send('You can\'t swap with yourself!')
+  except ValueError as e:
+    await ctx.message.channel.send(str(e))
   except:
     await ctx.message.channel.send('There was an error when trying to swap.')
 
