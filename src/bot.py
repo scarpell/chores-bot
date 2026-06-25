@@ -57,38 +57,67 @@ _default_channel = None
 # =================================
 # Bot Commands
 # =================================
+def get_chore_members():
+  try:
+    guild_id = int(os.getenv('GUILD'))
+    role_id = int(os.getenv('ROLE'))
+  except (TypeError, ValueError):
+    return None
+
+  guild = discord.utils.get(bot.guilds, id=guild_id)
+  if not guild:
+    return None
+
+  role = discord.utils.get(guild.roles, id=role_id)
+  if not role:
+    return None
+
+  bot_role = discord.utils.get(guild.roles, name='bot')
+  
+  users = []
+  for member in guild.members:
+    if role in member.roles:
+      if not bot_role or bot_role not in member.roles:
+        users.append(member)
+  return users
+
+
 def sync_users():
   if sch is None:
     return
-  _guild = next(filter(lambda g: g.id == int(os.getenv('GUILD')), bot.guilds))
-  role = next(filter(lambda r: r.id == int(os.getenv('ROLE')), _guild.roles))
-  bot_role = next(filter(lambda r: r.name == 'bot', _guild.roles))
-
-  users = []
-  for member in _guild.members:
-    if role in member.roles and bot_role not in member.roles:
-      users.append(member)
-
-  sch.load_state(users)
+  users = get_chore_members()
+  if users is not None:
+    sch.load_state(users)
 
 
 @bot.event
 async def on_ready():
   global _default_channel
-  _guild = next(filter(lambda g: g.id == int(os.getenv('GUILD')), bot.guilds))
-  _default_channel = next(filter(lambda c: c.id == int(os.getenv('CHANNEL')), 
-                      _guild.channels))
-  role = next(filter(lambda r: r.id == int(os.getenv('ROLE')), _guild.roles))
-  bot_role = next(filter(lambda r: r.name == 'bot', _guild.roles))
+  
+  try:
+    guild_id = int(os.getenv('GUILD'))
+    channel_id = int(os.getenv('CHANNEL'))
+  except (TypeError, ValueError) as e:
+    logger.error("GUILD or CHANNEL environment variables not set correctly: {}".format(e))
+    return
 
-  users = []
-  for member in _guild.members:
-    if role in member.roles and bot_role not in member.roles:
-      users.append(member)
+  guild = discord.utils.get(bot.guilds, id=guild_id)
+  if not guild:
+    logger.error("Guild {} not found.".format(guild_id))
+    return
+
+  _default_channel = discord.utils.get(guild.channels, id=channel_id)
+  if not _default_channel:
+    logger.error("Channel {} not found.".format(channel_id))
+    return
+
+  users = get_chore_members()
+  if users is None:
+    logger.error("Failed to fetch chore members during startup.")
+    users = []
 
   global sch
   sch = scheduler.Scheduler(users)
-  sync_users()
 
   notify.start()
   return
