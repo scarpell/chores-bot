@@ -10,6 +10,12 @@ echo "Killing any existing instances of the bot..."
 # The pkill command matches against the full command line (-f)
 pkill -f "python src/bot.py" || echo "No existing process found."
 
+echo "Checking for virtual environment..."
+if [ ! -d "venv-chores" ]; then
+    echo "Virtual environment 'venv-chores' not found. Creating it now..."
+    python3 -m venv venv-chores
+fi
+
 echo "Activating virtual environment..."
 source venv-chores/bin/activate
 
