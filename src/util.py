@@ -13,3 +13,9 @@ def load_env():
 
 def get_logs_folder():
   return pathlib.Path(__file__).resolve().parent.parent / 'logs/'
+
+
+def get_data_folder():
+  folder = pathlib.Path(__file__).resolve().parent.parent / 'data/'
+  folder.mkdir(exist_ok=True)
+  return folder

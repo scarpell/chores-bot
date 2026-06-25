@@ -3,6 +3,7 @@ from typing import List, Text, Tuple
 import calendar
 import datetime
 import discord
+import json
 import logging
 import pytablewriter
 
@@ -20,6 +21,59 @@ class Scheduler:
     self.signed_off = False
     self._users = users
     self._logger = logging.getLogger(logger_name)
+    self._state_file = util.get_data_folder() / 'schedule.json'
+    self.load_state(users)
+
+  def load_state(self, initial_users: List[discord.Member]):
+    """Load the schedule state from disk."""
+    if not self._state_file.exists():
+      self.save_state()
+      return
+
+    try:
+      with open(self._state_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        
+      self.signed_off = data.get('signed_off', False)
+      
+      # Rebuild the user queue based on the saved IDs
+      saved_ids = data.get('queue', [])
+      user_map = {u.id: u for u in initial_users}
+      
+      new_queue = []
+      for uid in saved_ids:
+        if uid in user_map:
+          new_queue.append(user_map[uid])
+          del user_map[uid]
+          
+      # Append any new users not in the saved file
+      for user in user_map.values():
+        new_queue.append(user)
+        
+      if new_queue:
+        self._users = new_queue
+        
+      self._logger.info('Schedule state loaded from disk.')
+    except Exception as e:
+      self._logger.error('Failed to load schedule state: {}'.format(e))
+
+  def save_state(self):
+    """Save the schedule state to disk."""
+    try:
+      data = {
+        'signed_off': self.signed_off,
+        'queue': [u.id for u in self._users]
+      }
+      with open(self._state_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    except Exception as e:
+      self._logger.error('Failed to save schedule state: {}'.format(e))
+
+  def reset_signoff(self):
+    """Reset the signoff status and save state."""
+    self.signed_off = False
+    self.save_state()
+    self._logger.info('Signoff status has been reset.')
 
   @property
   def on_call(self) -> discord.Member:
@@ -80,6 +134,7 @@ class Scheduler:
       util.discord_name(mem1), mem1.id, util.discord_name(mem2), mem2.id))
     self._logger.info('The user queue is now: [{}]'.format(
       ', '.join(util.discord_name(u) for u in self._users)))
+    self.save_state()
 
   def signoff(self):
     """Signoff a user for completing their task."""
@@ -90,3 +145,4 @@ class Scheduler:
       util.discord_name(self._users[-1]), self._users[-1].id))
     self._logger.info('{} (id: {}) is now on call'.format(
       util.discord_name(self.on_call), self.on_call.id))
+    self.save_state()

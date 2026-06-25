@@ -161,7 +161,7 @@ async def notify():
       'Reminder that <@{}> is responsible for the kitchen tonight!'.format(
         sch.on_call.id))
   elif sch.signed_off and curr_time >= RESET_TIME:
-    sch.signed_off = False
+    sch.reset_signoff()
   else:
     logger.info('Notification suppressed.')
 
