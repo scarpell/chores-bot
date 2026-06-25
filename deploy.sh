@@ -4,7 +4,14 @@
 cd ~/chores-bot || { echo "Failed to navigate to ~/chores-bot"; exit 1; }
 
 echo "Pulling latest changes from git..."
-git pull
+git pull || {
+    echo "=========================================================="
+    echo "ERROR: Git pull failed!"
+    echo "This may be due to local modifications or conflicts on the server."
+    echo "Please resolve these issues before redeploying."
+    echo "=========================================================="
+    exit 1
+}
 
 echo "Killing any existing instances of the bot..."
 # The pkill command matches against the full command line (-f)
