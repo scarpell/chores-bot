@@ -236,5 +236,30 @@ class SchedulerTestCase(unittest.TestCase):
     table_after = sch.generate_schedule()
     self.assertNotIn("Run `!swap reset` to reset all swapped entries.", table_after)
 
+  def test_skip_undoes_swaps_first(self):
+    sch = scheduler.Scheduler(self.users)
+    
+    # Alice (0) swaps with Bob (1)
+    sch.swap(self.users[0], self.users[1])
+    self.assertEqual(len(sch.swaps), 2)
+    self.assertEqual(sch.swaps[0], 222) # Bob is on Alice's day
+    self.assertEqual(sch.swaps[1], 111) # Alice is on Bob's day
+    
+    # Skip Alice (111)
+    sch.skip(self.users[0])
+    
+    # The swap should be undone completely
+    self.assertEqual(len(sch.swaps), 0)
+    
+    # Alice should be skipped for her next appearance (day 0)
+    self.assertIn(0, sch.skips)
+    
+    # Check the actual schedule mapping after skip:
+    # Alice (0) was skipped.
+    # Day 0 should be Bob (222)
+    # Day 1 should be Charlie (333)
+    self.assertEqual(sch.get_user_for_day(0).id, 222)
+    self.assertEqual(sch.get_user_for_day(1).id, 333)
+
 if __name__ == '__main__':
   unittest.main()

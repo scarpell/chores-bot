@@ -210,6 +210,16 @@ class Scheduler:
 
   def skip(self, member: discord.Member):
     """Skip the next appearance of the member."""
+    # Undo any swaps involving the member first
+    for abs_day in list(self.swaps.keys()):
+      if self.swaps[abs_day] == member.id:
+        del self.swaps[abs_day]
+        continue
+      if self.base_queue:
+        original_owner = self.base_queue[abs_day % len(self.base_queue)]
+        if original_owner.id == member.id:
+          del self.swaps[abs_day]
+
     skip_day = self.get_next_appearance(member)
     if skip_day not in self.skips:
       self.skips.append(skip_day)
