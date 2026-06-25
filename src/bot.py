@@ -74,33 +74,6 @@ async def on_ready():
   global sch
   sch = scheduler.Scheduler(users)
 
-  server_str = """
-
-            ██████╗██████╗███╗   ███╗██████╗███╗   ████████╗              
-            ██╔═══████╔══██████╗ ██████╔═══██████╗  ████╔══██╗             
-            ██║   ████████╔██╔████╔████║   ████╔██╗ ████║  ██║             
-            ██║   ████╔══████║╚██╔╝████║   ████║╚██╗████║  ██║             
-            ╚██████╔██║  ████║ ╚═╝ ██╚██████╔██║ ╚██████████╔╝             
-            ╚═════╝╚═╝  ╚═╚═╝     ╚═╝╚═════╝╚═╝  ╚═══╚═════╝              
-   
-    ████████╗  ██╗██████╗██████╗███████╗        ███╗   ███╗██████╗██████╗ 
-    ██╔════██║  ████╔═══████╔══████╔════╝        ████╗ ██████╔════╝██╔══██╗
-    ██║    █████████║   ████████╔█████╗          ██╔████╔████║  █████████╔╝
-    ██║    ██╔══████║   ████╔══████╔══╝          ██║╚██╔╝████║   ████╔══██╗
-    ╚████████║  ██╚██████╔██║  █████████╗        ██║ ╚═╝ ██╚██████╔██║  ██║
-    ╚═════╚═╝  ╚═╝╚═════╝╚═╝  ╚═╚══════╝        ╚═╝     ╚═╝╚═════╝╚═╝  ╚═╝
-
-Registered Users:
-{}
-
-Configured to notify every {} {}.
-
-Now Serving.\n""".format('\n'.join(u.nick or u.name for u in users),
-                         list(NOTIFICATION_FREQUENCY.values())[0],
-                         list(NOTIFICATION_FREQUENCY.keys())[0])
-
-  logger.info(server_str)
-  print(server_str, flush=True)
   notify.start()
   return
 
@@ -108,7 +81,7 @@ Now Serving.\n""".format('\n'.join(u.nick or u.name for u in users),
 @bot.command(name='today', help='Return the person who is on-call today')
 async def on_call_today(ctx):
   await ctx.message.channel.send(
-    '<@{}> is responsible for the kitchen tonight!'.format(sch.on_call.id))
+    '<@{}> is responsible for the dishes today!'.format(sch.on_call.id))
   return
 
   
@@ -142,7 +115,7 @@ async def notify():
 
   if curr_time.hour == 9:
     await _default_channel.send(
-      'Reminder that <@{}> is responsible for the kitchen tonight!'.format(
+      '<@{}> is responsible for the dishes today'.format(
         sch.on_call.id))
   elif curr_time.hour == 0:
     sch.rotate()

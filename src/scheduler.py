@@ -86,30 +86,41 @@ class Scheduler:
     """Generate a markdown representation of who is on call when.
 
     Returns:
-      Text: User forcast for next 7 days, in a markdown table.
+      Text: User forcast for next 7 days, in a formatted ascii table.
     """
-    dow = datetime.datetime.today().weekday()
-
-    if not self.signed_off:
-      days = ['{} (today)'.format(calendar.day_abbr[dow])]
-    else:
-      days = ['{} (tmrw)'.format(calendar.day_abbr[dow + 1])]
-    people = [util.discord_name(self._users[0])]
-
-    for i in range(1, 7):
-      if not self.signed_off:
-        day_name = calendar.day_abbr[(dow + i) % 7]
-      else:
-        day_name = calendar.day_abbr[(dow + i + 1) % 7]
-      days.append(day_name)
-
+    today = datetime.datetime.today()
+    
+    headers_line1 = []
+    headers_line2 = []
+    people_line = []
+    
+    for i in range(7):
+      target_date = today + datetime.timedelta(days=i)
+      date_str = '{} {}'.format(target_date.strftime('%B'), target_date.day)
+      
+      day_str = calendar.day_abbr[target_date.weekday()]
+      if i == 0:
+        day_str += ' (today)'
+        
       user = self._users[i % len(self._users)]
-      people.append(user.nick or user.name)
-
-    writer = pytablewriter.MarkdownTableWriter(
-      headers=days, value_matrix=[people])
-
-    return writer.dumps()
+      user_str = util.discord_name(user)
+      
+      col_width = max(len(date_str), len(day_str), len(user_str)) + 2
+      
+      headers_line1.append(' {} '.format(date_str).center(col_width))
+      headers_line2.append(' {} '.format(day_str).center(col_width))
+      people_line.append(' {} '.format(user_str).center(col_width))
+      
+    header_sep = '+' + '+'.join('-' * len(h) for h in headers_line1) + '+'
+    
+    table_str = 'Dishes Schedule\n'
+    table_str += '=' * 15 + '\n\n'
+    table_str += '|' + '|'.join(headers_line1) + '|\n'
+    table_str += '|' + '|'.join(headers_line2) + '|\n'
+    table_str += header_sep + '\n'
+    table_str += '|' + '|'.join(people_line) + '|\n'
+    
+    return table_str
 
   def swap(self, mem1: discord.Member, mem2: discord.Member):
     """Swap two user's positions in the queue.
