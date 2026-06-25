@@ -110,5 +110,31 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertIn("Bob", table)
     self.assertIn("(swapped)", table)
 
+  def test_load_state_add_and_remove_users(self):
+    sch = scheduler.Scheduler(self.users)
+    self.assertEqual([u.id for u in sch.base_queue], [111, 222, 333, 444])
+    
+    new_users = [
+      MockMember(111, 'Alice', 'Aly'),
+      MockMember(333, 'Charlie', 'Chaz'),
+      MockMember(555, 'Eve')
+    ]
+    
+    # Day 0 (Alice) swaps with Day 1 (Bob)
+    sch.swap(self.users[0], self.users[1])
+    self.assertIn(0, sch.swaps)
+    self.assertEqual(sch.swaps[0], 222)
+    
+    sch.load_state(new_users)
+    
+    # Queue order check
+    self.assertEqual([u.id for u in sch.base_queue], [111, 333, 555])
+    
+    # Swap cleanup check
+    self.assertNotIn(0, sch.swaps)
+    
+    # Persistence check
+    self.assertTrue(sch._state_file.exists())
+
 if __name__ == '__main__':
   unittest.main()

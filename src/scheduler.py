@@ -40,7 +40,13 @@ class Scheduler:
       
       # Rebuild the base queue based on the saved IDs
       saved_ids = data.get('base_queue', data.get('queue', []))
+      initial_user_ids = {u.id for u in initial_users}
       user_map = {u.id: u for u in initial_users}
+      
+      # Detect removed and added users
+      removed_ids = [uid for uid in saved_ids if uid not in initial_user_ids]
+      saved_ids_set = set(saved_ids)
+      added_users = [u for u in initial_users if u.id not in saved_ids_set]
       
       new_queue = []
       for uid in saved_ids:
@@ -48,14 +54,25 @@ class Scheduler:
           new_queue.append(user_map[uid])
           del user_map[uid]
           
-      # Append any new users not in the saved file
-      for user in user_map.values():
+      # Append newly added users to the end
+      for user in added_users:
         new_queue.append(user)
         
       if new_queue:
         self.base_queue = new_queue
         
-      self._logger.info('Schedule state loaded from disk.')
+      if removed_ids or added_users:
+        self._logger.info(
+          'Schedule updated: added users {}, removed user IDs {}'.format(
+            [u.name for u in added_users], removed_ids)
+        )
+        # Clean up any swaps involving removed users
+        for abs_day in list(self.swaps.keys()):
+          if self.swaps[abs_day] in removed_ids:
+            del self.swaps[abs_day]
+        self.save_state()
+      else:
+        self._logger.info('Schedule state loaded from disk.')
     except Exception as e:
       self._logger.error('Failed to load schedule state: {}'.format(e))
 
