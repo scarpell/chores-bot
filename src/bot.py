@@ -185,7 +185,20 @@ async def notifications_init():
   await asyncio.sleep(delta.total_seconds())
   return
 
-  
+
+@bot.event
+async def on_command_error(ctx, error):
+  if isinstance(error, commands.MemberNotFound):
+    await ctx.send("Could not find member: {}".format(error.argument))
+  elif isinstance(error, commands.BadArgument):
+    await ctx.send("Bad argument: {}".format(str(error)))
+  elif isinstance(error, commands.MissingRequiredArgument):
+    await ctx.send("Missing required argument: {}".format(error.param.name))
+  else:
+    logger.error("Ignoring exception in command {}: {}".format(ctx.command, error))
+    await bot.on_command_error(ctx, error)
+
+
 if __name__ == '__main__':
   util.load_env()
   token = os.getenv('TOKEN')
