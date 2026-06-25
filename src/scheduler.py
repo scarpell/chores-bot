@@ -140,13 +140,13 @@ class Scheduler:
 
   def get_next_appearance(self, member: discord.Member) -> int:
     for i in range(100):
-      if self.get_user_for_day(i) == member:
+      if self.get_user_for_day(i).id == member.id:
         return self.day_index + i
     raise ValueError('Member not found in upcoming schedule')
 
   def swap(self, mem1: discord.Member, mem2: discord.Member):
     """Swap two user's upcoming positions in the queue."""
-    if mem1 == mem2:
+    if mem1.id == mem2.id:
       raise ValueError('Members need to be different.')
 
     day1 = self.get_next_appearance(mem1)

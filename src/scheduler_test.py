@@ -1,97 +1,114 @@
-from parameterized import parameterized
-from unittest import mock
 import unittest
+from unittest import mock
+import json
+import os
+import pathlib
+import datetime
+import calendar
 
 import scheduler
+import util
 
-
-def _gen_user(name):
-  return mock.MagicMock(name=str(name), id=name, nick=str(name), uuid=name)
-
+class MockMember:
+  def __init__(self, id, name, nick=None):
+    self.id = id
+    self.name = name
+    self.nick = nick
 
 class SchedulerTestCase(unittest.TestCase):
-  @parameterized.expand([
-    ('single list', ['test_user'], 'test_user'),
-    ('multiple users', ['first', 'second', 'third'], 'first')
-  ])
-  def test_on_call(self, name, users, on_call_user):
-    sch = scheduler.Scheduler(users)
-    self.assertEqual(sch.on_call, on_call_user)
+  def setUp(self):
+    # Setup some test users
+    self.users = [
+      MockMember(111, 'Alice', 'Aly'),
+      MockMember(222, 'Bob'),
+      MockMember(333, 'Charlie', 'Chaz'),
+      MockMember(444, 'David')
+    ]
+    # Clean up test schedule file if it exists
+    self.test_data_dir = util.get_data_folder()
+    self.state_file = self.test_data_dir / 'schedule.json'
+    if self.state_file.exists():
+      os.remove(self.state_file)
 
-  @mock.patch('pytablewriter.MarkdownTableWriter')
-  def test_schedule_gen_simple(self, mock_writer):
-    users = [_gen_user(i) for i in range(1, 5)]
+  def tearDown(self):
+    if self.state_file.exists():
+      os.remove(self.state_file)
 
-    sch = scheduler.Scheduler(users)
-    sch.generate_schedule()
-
-    _, kwargs = mock_writer.call_args
-    self.assertListEqual(kwargs['value_matrix'], 
-                         [['1', '2', '3', '4', '1', '2', '3']])
-
-  @mock.patch('pytablewriter.MarkdownTableWriter')
-  def test_schedule_gen_not_signed_off(self, mock_writer):
-    users = [_gen_user(i) for i in range(1, 5)]
-
-    sch = scheduler.Scheduler(users)
-
-    sch.signed_off = False
-    self.assertFalse(sch.signed_off)
+  def test_on_call(self):
+    sch = scheduler.Scheduler(self.users)
+    self.assertEqual(sch.on_call.id, 111)
     
-    sch.generate_schedule()
+    # Rotate and check
+    sch.rotate()
+    self.assertEqual(sch.on_call.id, 222)
 
-    _, kwargs = mock_writer.call_args
-    self.assertIn('today', kwargs['headers'][0])
+  def test_get_user_for_day(self):
+    sch = scheduler.Scheduler(self.users)
+    # Day 0: Alice
+    # Day 1: Bob
+    # Day 2: Charlie
+    # Day 3: David
+    # Day 4: Alice
+    self.assertEqual(sch.get_user_for_day(0).id, 111)
+    self.assertEqual(sch.get_user_for_day(1).id, 222)
+    self.assertEqual(sch.get_user_for_day(4).id, 111)
 
-  @mock.patch('pytablewriter.MarkdownTableWriter')
-  def test_schedule_gen_signed_off(self, mock_writer):
-    users = [_gen_user(i) for i in range(1, 5)]
-
-    sch = scheduler.Scheduler(users)
-
-    sch.signed_off = True
-    self.assertTrue(sch.signed_off)
+  def test_swap_happy(self):
+    sch = scheduler.Scheduler(self.users)
     
-    sch.generate_schedule()
-
-    _, kwargs = mock_writer.call_args
-    self.assertIn('tmrw', kwargs['headers'][0])
-
-  @parameterized.expand([
-    ('size 2', [0, 1], 0, 1, [1, 0]),
-    ('size 5', [0, 1, 2, 3, 4], 1, 4, [0, 4, 2, 3, 1]),
-  ])
-  def test_swap_happy(self, name, before_users, idx1, idx2, after_users):
-    pre_users = [_gen_user(u) for u in before_users]
-    sch = scheduler.Scheduler(pre_users)
-    self.assertListEqual(sch._users, pre_users)
-
-    val1 = pre_users[idx1]
-    val2 = pre_users[idx2]
-    sch.swap(val1, val2)
-
-    self.assertListEqual([u.uuid for u in sch._users],
-                         after_users)
+    # Alice (day_index + 0) swaps with Charlie (day_index + 2)
+    sch.swap(self.users[0], self.users[2])
+    
+    # After swap, day 0 should be Charlie (333), day 2 should be Alice (111)
+    self.assertEqual(sch.get_user_for_day(0).id, 333)
+    self.assertEqual(sch.get_user_for_day(1).id, 222)
+    self.assertEqual(sch.get_user_for_day(2).id, 111)
+    
+    # Test persistence of swap
+    sch2 = scheduler.Scheduler(self.users)
+    self.assertEqual(sch2.get_user_for_day(0).id, 333)
+    self.assertEqual(sch2.get_user_for_day(2).id, 111)
 
   def test_swap_same_person(self):
-    user = _gen_user('test_user')
-    sch = scheduler.Scheduler([user])
-
+    sch = scheduler.Scheduler(self.users)
     with self.assertRaises(ValueError):
-      sch.swap(user, user)
+      sch.swap(self.users[0], self.users[0])
 
-  def test_signoff(self):
-    users = [_gen_user(i) for i in range(5)]
+  def test_swap_not_in_schedule(self):
+    sch = scheduler.Scheduler(self.users)
+    fake_user = MockMember(999, 'Fake')
+    with self.assertRaises(ValueError):
+      sch.swap(self.users[0], fake_user)
+
+  def test_rotate_cleanup(self):
+    sch = scheduler.Scheduler(self.users)
+    # Alice (0) swaps with Bob (1)
+    sch.swap(self.users[0], self.users[1])
     
-    sch = scheduler.Scheduler(users)
+    # Swaps dict should have keys for day 0 and day 1
+    self.assertIn(0, sch.swaps)
+    self.assertIn(1, sch.swaps)
+    
+    # Rotate once (day_index becomes 1)
+    sch.rotate()
+    # Day 0 swap should be cleaned up, Day 1 should remain
+    self.assertNotIn(0, sch.swaps)
+    self.assertIn(1, sch.swaps)
+    
+    # Rotate again (day_index becomes 2)
+    sch.rotate()
+    self.assertNotIn(1, sch.swaps)
 
-    sch.signed_off = False
-    self.assertFalse(sch.signed_off)
-
-    sch.signoff()
-
-    self.assertTrue(sch.signed_off)
-    self.assertListEqual([u.uuid for u in sch._users], [1, 2, 3, 4, 0])
+  def test_generate_schedule(self):
+    sch = scheduler.Scheduler(self.users)
+    # Alice swaps with Bob
+    sch.swap(self.users[0], self.users[1])
+    
+    table = sch.generate_schedule()
+    self.assertIn("Dishes Schedule", table)
+    self.assertIn("Aly", table) # Alice's nick
+    self.assertIn("Bob", table)
+    self.assertIn("(swapped)", table)
 
 if __name__ == '__main__':
   unittest.main()
