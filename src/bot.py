@@ -57,6 +57,21 @@ _default_channel = None
 # =================================
 # Bot Commands
 # =================================
+def sync_users():
+  if sch is None:
+    return
+  _guild = next(filter(lambda g: g.id == int(os.getenv('GUILD')), bot.guilds))
+  role = next(filter(lambda r: r.id == int(os.getenv('ROLE')), _guild.roles))
+  bot_role = next(filter(lambda r: r.name == 'bot', _guild.roles))
+
+  users = []
+  for member in _guild.members:
+    if role in member.roles and bot_role not in member.roles:
+      users.append(member)
+
+  sch.load_state(users)
+
+
 @bot.event
 async def on_ready():
   global _default_channel
@@ -73,9 +88,15 @@ async def on_ready():
 
   global sch
   sch = scheduler.Scheduler(users)
+  sync_users()
 
   notify.start()
   return
+
+
+@bot.before_invoke
+async def before_any_command(ctx):
+  sync_users()
 
 
 @bot.command(name='today', help='Return the person who is on-call today')
@@ -134,6 +155,7 @@ async def swap(ctx, member1: discord.Member = None, member2: discord.Member = No
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
 async def notify():
+  sync_users()
   now_utc = datetime.datetime.now(datetime.timezone.utc)
   curr_time = now_utc.astimezone(zoneinfo.ZoneInfo('America/Denver'))
 

@@ -66,10 +66,18 @@ class Scheduler:
           'Schedule updated: added users {}, removed user IDs {}'.format(
             [u.name for u in added_users], removed_ids)
         )
-        # Clean up any swaps involving removed users
+        # Clean up any swaps involving removed users (both swapped-in and original owners)
         for abs_day in list(self.swaps.keys()):
+          # Check if the swapped-in user is a removed user
           if self.swaps[abs_day] in removed_ids:
             del self.swaps[abs_day]
+            continue
+            
+          # Check if the original owner of this day was a removed user
+          if len(saved_ids) > 0:
+            original_owner_id = saved_ids[abs_day % len(saved_ids)]
+            if original_owner_id in removed_ids:
+              del self.swaps[abs_day]
         self.save_state()
       else:
         self._logger.info('Schedule state loaded from disk.')
@@ -171,6 +179,12 @@ class Scheduler:
 
     self.swaps[day1] = mem2.id
     self.swaps[day2] = mem1.id
+
+    # If a day maps back to its default user, remove the swap entry
+    for day in (day1, day2):
+      default_user = self.base_queue[day % len(self.base_queue)]
+      if day in self.swaps and self.swaps[day] == default_user.id:
+        del self.swaps[day]
 
     self._logger.info('Swapped {} (day {}) and {} (day {}).'.format(
       util.discord_name(mem1), day1, util.discord_name(mem2), day2))

@@ -136,5 +136,41 @@ class SchedulerTestCase(unittest.TestCase):
     # Persistence check
     self.assertTrue(sch._state_file.exists())
 
+  def test_swap_back_removes_swap_cache(self):
+    sch = scheduler.Scheduler(self.users)
+    
+    # Swap Alice (0) and Bob (1)
+    sch.swap(self.users[0], self.users[1])
+    self.assertIn(0, sch.swaps)
+    self.assertIn(1, sch.swaps)
+    
+    # Swap them back
+    sch.swap(self.users[0], self.users[1])
+    # Now they should be removed from the swap cache
+    self.assertNotIn(0, sch.swaps)
+    self.assertNotIn(1, sch.swaps)
+
+  def test_load_state_remove_user_clears_related_swaps(self):
+    sch = scheduler.Scheduler(self.users)
+    
+    # Swap Bob (222) and Charlie (333)
+    sch.swap(self.users[1], self.users[2])
+    self.assertIn(1, sch.swaps) # Bob's day
+    self.assertIn(2, sch.swaps) # Charlie's day
+    self.assertEqual(sch.swaps[1], 333)
+    self.assertEqual(sch.swaps[2], 222)
+    
+    # Load state removing Bob (222)
+    new_users = [
+      MockMember(111, 'Alice', 'Aly'),
+      MockMember(333, 'Charlie', 'Chaz'),
+      MockMember(444, 'David')
+    ]
+    sch.load_state(new_users)
+    
+    # Both swap entries (day 1 and day 2) should be removed
+    self.assertNotIn(1, sch.swaps)
+    self.assertNotIn(2, sch.swaps)
+
 if __name__ == '__main__':
   unittest.main()
