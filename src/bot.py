@@ -92,20 +92,40 @@ async def schedule(ctx):
 
 
 @bot.command(name='swap', help='Swap on call position with chosen person')
-async def swap(ctx, member: discord.Member = None):
-  if member is None:
-    await ctx.message.channel.send('**Usage:** `!swap @username`\nUse this command to trade your schedule day with someone else!')
+async def swap(ctx, member1: discord.Member = None, member2: discord.Member = None):
+  if member1 is None:
+    await ctx.message.channel.send(
+      '**Usage:**\n'
+      '- `!swap @username` (trades your upcoming day with them)\n'
+      '- `!swap @username1 @username2` (trades the upcoming days of two other people)'
+    )
     return
 
+  if member2 is None:
+    author = ctx.message.author
+    try:
+      sch.get_next_appearance(author)
+    except ValueError:
+      await ctx.message.channel.send(
+        'You (<@{}>) are not in the upcoming schedule, so you cannot swap yourself. '
+        'To swap other members, use: `!swap @User1 @User2`'.format(author.id)
+      )
+      return
+    mem1 = author
+    mem2 = member1
+  else:
+    mem1 = member1
+    mem2 = member2
+
   try:
-    sch.swap(ctx.message.author, member)
-  
+    sch.swap(mem1, mem2)
     await ctx.message.channel.send('Users have been switched! The new schedule '
                                   'should be as follows:')
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
   except ValueError as e:
     await ctx.message.channel.send(str(e))
-  except:
+  except Exception as e:
+    logger.error('Error in swap command: {}'.format(e))
     await ctx.message.channel.send('There was an error when trying to swap.')
 
   return
