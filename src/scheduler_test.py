@@ -172,5 +172,69 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertNotIn(1, sch.swaps)
     self.assertNotIn(2, sch.swaps)
 
+  def test_skip(self):
+    sch = scheduler.Scheduler(self.users)
+    # Default order: Alice (111), Bob (222), Charlie (333), David (444)
+    self.assertEqual(sch.get_user_for_day(0).id, 111)
+    self.assertEqual(sch.get_user_for_day(1).id, 222)
+    self.assertEqual(sch.get_user_for_day(2).id, 333)
+    
+    # Skip Bob (222)'s next appearance (Day 1)
+    sch.skip(self.users[1])
+    self.assertIn(1, sch.skips)
+    
+    # After skip, Day 1 should be Charlie (333), Day 2 should be David (444), Day 3 should be Alice (111), Day 4 should be Bob (222)
+    self.assertEqual(sch.get_user_for_day(0).id, 111)
+    self.assertEqual(sch.get_user_for_day(1).id, 333)
+    self.assertEqual(sch.get_user_for_day(2).id, 444)
+    self.assertEqual(sch.get_user_for_day(3).id, 111)
+    self.assertEqual(sch.get_user_for_day(4).id, 222)
+    
+    # Rotate to Day 2 (skipping Day 1 which contains the skip)
+    sch.rotate() # Day 1
+    sch.rotate() # Day 2
+    # Skips should be cleaned up
+    self.assertNotIn(1, sch.skips)
+
+  def test_skip_reset_and_display(self):
+    sch = scheduler.Scheduler(self.users)
+    
+    # Skip Bob
+    sch.skip(self.users[1])
+    self.assertEqual(len(sch.skips), 1)
+    
+    # Verify schedule table footer matches expected printout
+    table = sch.generate_schedule()
+    self.assertIn("Skipped members:", table)
+    self.assertIn("Bob", table)
+    self.assertIn("Run `!skip reset` to reset all skipped entries.", table)
+    
+    # Reset
+    sch.reset_skips()
+    self.assertEqual(len(sch.skips), 0)
+    
+    # Verify schedule table footer is removed
+    table_after = sch.generate_schedule()
+    self.assertNotIn("Skipped members:", table_after)
+
+  def test_swap_reset_and_display(self):
+    sch = scheduler.Scheduler(self.users)
+    
+    # Swap Alice and Bob
+    sch.swap(self.users[0], self.users[1])
+    self.assertEqual(len(sch.swaps), 2)
+    
+    # Verify schedule table footer matches expected printout
+    table = sch.generate_schedule()
+    self.assertIn("Run `!swap reset` to reset all swapped entries.", table)
+    
+    # Reset
+    sch.reset_swaps()
+    self.assertEqual(len(sch.swaps), 0)
+    
+    # Verify schedule table footer is removed
+    table_after = sch.generate_schedule()
+    self.assertNotIn("Run `!swap reset` to reset all swapped entries.", table_after)
+
 if __name__ == '__main__':
   unittest.main()

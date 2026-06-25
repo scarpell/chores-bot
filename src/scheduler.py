@@ -20,6 +20,7 @@ class Scheduler:
     self.base_queue = users
     self.day_index = 0
     self.swaps = {}
+    self.skips = []
     self._logger = logging.getLogger(logger_name)
     self._state_file = util.get_data_folder() / 'schedule.json'
     self.load_state(users)
@@ -37,6 +38,7 @@ class Scheduler:
       self.day_index = data.get('day_index', 0)
       raw_swaps = data.get('swaps', {})
       self.swaps = {int(k): v for k, v in raw_swaps.items()}
+      self.skips = data.get('skips', [])
       
       # Rebuild the base queue based on the saved IDs
       saved_ids = data.get('base_queue', data.get('queue', []))
@@ -90,6 +92,7 @@ class Scheduler:
       data = {
         'day_index': self.day_index,
         'swaps': self.swaps,
+        'skips': self.skips,
         'base_queue': [u.id for u in self.base_queue]
       }
       with open(self._state_file, 'w', encoding='utf-8') as f:
@@ -104,7 +107,9 @@ class Scheduler:
       for u in self.base_queue:
         if u.id == user_id:
           return u
-    base_idx = abs_day % len(self.base_queue)
+    # Offset queue mapping based on how many skips occurred before or on this day
+    num_skips = sum(1 for s in self.skips if s <= abs_day)
+    base_idx = (abs_day + num_skips) % len(self.base_queue)
     return self.base_queue[base_idx]
 
   @property
@@ -160,7 +165,20 @@ class Scheduler:
     table_str += '|' + '|'.join(people_line1) + '|\n'
     if any_swaps:
       table_str += '|' + '|'.join(people_line2) + '|\n'
+      
+    if self.skips:
+      table_str += '\nSkipped members:\n'
+      for s in self.skips:
+        target_date = today + datetime.timedelta(days=(s - self.day_index))
+        date_str = '{} {}'.format(target_date.strftime('%B'), target_date.day)
+        num_skips_before = sum(1 for x in self.skips if x < s)
+        skipped_user = self.base_queue[(s + num_skips_before) % len(self.base_queue)]
+        table_str += '- {} (on {})\n'.format(util.discord_name(skipped_user), date_str)
+      table_str += '\nRun `!skip reset` to reset all skipped entries.\n'
     
+    if self.swaps:
+      table_str += '\nRun `!swap reset` to reset all swapped entries.\n'
+      
     return table_str
 
   def get_next_appearance(self, member: discord.Member) -> int:
@@ -190,6 +208,28 @@ class Scheduler:
       util.discord_name(mem1), day1, util.discord_name(mem2), day2))
     self.save_state()
 
+  def skip(self, member: discord.Member):
+    """Skip the next appearance of the member."""
+    skip_day = self.get_next_appearance(member)
+    if skip_day not in self.skips:
+      self.skips.append(skip_day)
+      self.skips.sort()
+      self._logger.info('Skipped {} on day {}.'.format(
+        util.discord_name(member), skip_day))
+      self.save_state()
+
+  def reset_skips(self):
+    """Remove all skipped entries."""
+    self.skips = []
+    self._logger.info('Reset all skipped entries.')
+    self.save_state()
+
+  def reset_swaps(self):
+    """Remove all swapped entries."""
+    self.swaps = {}
+    self._logger.info('Reset all swapped entries.')
+    self.save_state()
+
   def rotate(self):
     """Rotate the queue to the next user."""
     self.day_index += 1
@@ -197,6 +237,12 @@ class Scheduler:
     old_keys = [k for k in self.swaps.keys() if k < self.day_index]
     for k in old_keys:
       del self.swaps[k]
+      
+    # Cleanup expired skips and adjust day_index to maintain correct mapping
+    old_skips = [s for s in self.skips if s < self.day_index]
+    if old_skips:
+      self.day_index += len(old_skips)
+      self.skips = [s for s in self.skips if s >= self.day_index]
       
     self._logger.info('Queue rotated automatically.')
     self._logger.info('{} (id: {}) is now on call'.format(
