@@ -47,6 +47,7 @@ NOTIFICATION_START = datetime.time(21, 30, 0, 0)
 
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 bot = commands.Bot(command_prefix=commands.when_mentioned_or(COMMAND_PREFIX), 
                    intents=intents)
 
