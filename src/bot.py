@@ -185,4 +185,6 @@ async def notifications_init():
   
 if __name__ == '__main__':
   util.load_env()
-  bot.run(os.getenv('TOKEN'))
+  token = os.getenv('TOKEN')
+  print(f"LOADED TOKEN: '{token}'", flush=True)
+  bot.run(token)
