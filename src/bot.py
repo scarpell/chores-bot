@@ -9,6 +9,7 @@ import datetime
 import discord
 import logging
 import os
+import zoneinfo
 
 import scheduler
 import util
@@ -41,9 +42,7 @@ logger.addHandler(console_handler)
 # =================================
 COMMAND_PREFIX = '!'
 
-NOTIFICATION_FREQUENCY = {'minutes': 30.0}
-RESET_TIME = datetime.time(4, 20, 0, 0)
-NOTIFICATION_START = datetime.time(21, 30, 0, 0)
+NOTIFICATION_FREQUENCY = {'minutes': 60.0}
 
 intents = discord.Intents.default()
 intents.members = True
@@ -134,34 +133,19 @@ async def swap(ctx, member: discord.Member):
 
   return
 
-  
-@bot.command(name='signoff', help='Sign off the on-call member for today')
-async def signoff(ctx):
-  oncall = sch.on_call
-
-  if ctx.message.author == oncall:
-    await ctx.message.channel.send('You can\'t sign off yourself!')
-    logger.warning('{} tried to sign off themselves'.format(ctx.message.author))
-    return
-
-  sch.signoff()
-  await ctx.message.channel.send(
-    '<@{}> has been signed off for tonight! <@{}> is responsible for '
-    'the kitchen next.'.format(oncall.id, sch.on_call.id))
-  return
 
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
 async def notify():
-  curr_time = datetime.datetime.now().time()
+  now_utc = datetime.datetime.now(datetime.timezone.utc)
+  curr_time = now_utc.astimezone(zoneinfo.ZoneInfo('America/Denver'))
 
-  if not sch.signed_off and (curr_time >= NOTIFICATION_START or \
-     (curr_time <= RESET_TIME)):
+  if curr_time.hour == 9:
     await _default_channel.send(
       'Reminder that <@{}> is responsible for the kitchen tonight!'.format(
         sch.on_call.id))
-  elif sch.signed_off and curr_time >= RESET_TIME:
-    sch.reset_signoff()
+  elif curr_time.hour == 0:
+    sch.rotate()
   else:
     logger.info('Notification suppressed.')
 
@@ -172,11 +156,11 @@ async def notify():
 @notify.before_loop
 async def notifications_init():
   """Sleep so that the notifications start on the hour."""
-  next_hour = datetime.datetime.now()
-  next_hour = next_hour.replace(
+  now_utc = datetime.datetime.now(datetime.timezone.utc)
+  next_hour = now_utc.replace(
     minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
 
-  delta = next_hour - datetime.datetime.now()
+  delta = next_hour - now_utc
   logger.info('Sleeping {} seconds before activating notifications'.format(
     delta.total_seconds()))
   await asyncio.sleep(delta.total_seconds())

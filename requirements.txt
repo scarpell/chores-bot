@@ -2,3 +2,4 @@ discord.py
 parameterized
 python-dotenv
 pytablewriter
+tzdata

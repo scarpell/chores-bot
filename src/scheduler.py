@@ -136,6 +136,14 @@ class Scheduler:
       ', '.join(util.discord_name(u) for u in self._users)))
     self.save_state()
 
+  def rotate(self):
+    """Rotate the queue to the next user."""
+    self._users.append(self._users.pop(0))
+    self._logger.info('Queue rotated automatically.')
+    self._logger.info('{} (id: {}) is now on call'.format(
+      util.discord_name(self.on_call), self.on_call.id))
+    self.save_state()
+
   def signoff(self):
     """Signoff a user for completing their task."""
     self._users.append(self._users.pop(0))
