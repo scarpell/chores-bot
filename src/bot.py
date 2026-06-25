@@ -117,8 +117,7 @@ async def swap(ctx, arg1: str = None, arg2: str = None):
   if arg1 is None:
     await ctx.message.channel.send(
       '**Usage:**\n'
-      '- `!swap @username` (trades your upcoming day with them)\n'
-      '- `!swap @username1 @username2` (trades the upcoming days of two other people)\n'
+      '- `!swap @username1 @username2` (trades the upcoming days of two people)\n'
       '- `!swap reset` (resets all active swapped entries)'
     )
     return
@@ -130,6 +129,14 @@ async def swap(ctx, arg1: str = None, arg2: str = None):
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
     return
 
+  if arg2 is None:
+    await ctx.message.channel.send(
+      '**Usage:**\n'
+      '- `!swap @username1 @username2` (trades the upcoming days of two people)\n'
+      '- `!swap reset` (resets all active swapped entries)'
+    )
+    return
+
   # Convert arg1 to a Member
   try:
     member1 = await commands.MemberConverter().convert(ctx, arg1)
@@ -137,32 +144,15 @@ async def swap(ctx, arg1: str = None, arg2: str = None):
     await ctx.message.channel.send('Could not find member: {}'.format(arg1))
     return
 
-  member2 = None
-  if arg2 is not None:
-    try:
-      member2 = await commands.MemberConverter().convert(ctx, arg2)
-    except commands.MemberNotFound:
-      await ctx.message.channel.send('Could not find member: {}'.format(arg2))
-      return
-
-  if member2 is None:
-    author = ctx.message.author
-    try:
-      sch.get_next_appearance(author)
-    except ValueError:
-      await ctx.message.channel.send(
-        'You (<@{}>) are not in the upcoming schedule, so you cannot swap yourself. '
-        'To swap other members, use: `!swap @User1 @User2`'.format(author.id)
-      )
-      return
-    mem1 = author
-    mem2 = member1
-  else:
-    mem1 = member1
-    mem2 = member2
+  # Convert arg2 to a Member
+  try:
+    member2 = await commands.MemberConverter().convert(ctx, arg2)
+  except commands.MemberNotFound:
+    await ctx.message.channel.send('Could not find member: {}'.format(arg2))
+    return
 
   try:
-    sch.swap(mem1, mem2)
+    sch.swap(member1, member2)
     await ctx.message.channel.send('Users have been switched! The new schedule '
                                   'should be as follows:')
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
@@ -177,34 +167,41 @@ async def swap(ctx, arg1: str = None, arg2: str = None):
 
 @bot.command(name='skip', help='Skip the next appearance of a user or reset skips')
 async def skip(ctx, arg: str = None):
-  if arg is not None and arg.lower() == 'reset':
+  if arg is None:
+    await ctx.message.channel.send(
+      '**Usage:**\n'
+      '- `!skip @username` (skips the next appearance of the specified user)\n'
+      '- `!skip reset` (resets all active skipped entries)'
+    )
+    return
+
+  if arg.lower() == 'reset':
     sch.reset_skips()
     await ctx.message.channel.send('All skipped entries have been reset! The new schedule '
                                   'is as follows:')
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
     return
 
-  member = None
-  if arg is None:
-    member = ctx.message.author
-  else:
-    # Try converting the argument to a Member
-    try:
-      member = await commands.MemberConverter().convert(ctx, arg)
-    except commands.MemberNotFound:
-      # If conversion fails, let's output a usage message
-      await ctx.message.channel.send(
-        '**Usage:**\n'
-        '- `!skip` (skips your next appearance)\n'
-        '- `!skip @username` (skips the next appearance of the specified user)\n'
-        '- `!skip reset` (resets all active skipped entries)'
-      )
-      return
+  # Try converting the argument to a Member
+  try:
+    member = await commands.MemberConverter().convert(ctx, arg)
+  except commands.MemberNotFound:
+    # If conversion fails, let's output a usage message
+    await ctx.message.channel.send(
+      '**Usage:**\n'
+      '- `!skip @username` (skips the next appearance of the specified user)\n'
+      '- `!skip reset` (resets all active skipped entries)'
+    )
+    return
 
   try:
-    sch.skip(member)
-    await ctx.message.channel.send('{} has been skipped for their next appearance! The new schedule '
-                                  'is as follows:'.format(util.discord_name(member)))
+    was_skipped = sch.skip(member)
+    if was_skipped:
+      await ctx.message.channel.send('{} has been skipped for their next appearance! The new schedule '
+                                    'is as follows:'.format(util.discord_name(member)))
+    else:
+      await ctx.message.channel.send('{} is no longer skipped! The new schedule '
+                                    'is as follows:'.format(util.discord_name(member)))
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
   except ValueError as e:
     await ctx.message.channel.send(str(e))

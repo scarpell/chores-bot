@@ -208,8 +208,29 @@ class Scheduler:
       util.discord_name(mem1), day1, util.discord_name(mem2), day2))
     self.save_state()
 
-  def skip(self, member: discord.Member):
-    """Skip the next appearance of the member."""
+  def skip(self, member: discord.Member) -> bool:
+    """Skip the next appearance of the member or toggle it off if already skipped.
+
+    Returns:
+      bool: True if skipped, False if unskipped.
+    """
+    # Check if the member is already skipped
+    found_skip_day = None
+    for s in self.skips:
+      num_skips_before = sum(1 for x in self.skips if x < s)
+      skipped_user = self.base_queue[(s + num_skips_before) % len(self.base_queue)]
+      if skipped_user.id == member.id:
+        found_skip_day = s
+        break
+
+    if found_skip_day is not None:
+      self.skips.remove(found_skip_day)
+      self._logger.info('Removed skip for {} on day {}.'.format(
+        util.discord_name(member), found_skip_day))
+      self.save_state()
+      return False
+
+    # Otherwise, perform the skip
     # Undo any swaps involving the member first
     for abs_day in list(self.swaps.keys()):
       if self.swaps[abs_day] == member.id:
@@ -227,6 +248,8 @@ class Scheduler:
       self._logger.info('Skipped {} on day {}.'.format(
         util.discord_name(member), skip_day))
       self.save_state()
+      return True
+    return False
 
   def reset_skips(self):
     """Remove all skipped entries."""

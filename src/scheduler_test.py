@@ -261,5 +261,18 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertEqual(sch.get_user_for_day(0).id, 222)
     self.assertEqual(sch.get_user_for_day(1).id, 333)
 
+  def test_skip_toggle(self):
+    sch = scheduler.Scheduler(self.users)
+    
+    # Skip Bob
+    was_skipped1 = sch.skip(self.users[1])
+    self.assertTrue(was_skipped1)
+    self.assertIn(1, sch.skips)
+    
+    # Skip Bob again (should toggle off)
+    was_skipped2 = sch.skip(self.users[1])
+    self.assertFalse(was_skipped2)
+    self.assertNotIn(1, sch.skips)
+
 if __name__ == '__main__':
   unittest.main()
