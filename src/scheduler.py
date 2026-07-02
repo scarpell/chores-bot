@@ -26,16 +26,19 @@ class Scheduler:
   # Helpers
   # ------------------------------------------------------------------
 
-  def _active_skip_ids(self) -> set:
-    """Return the set of user IDs that currently have an active skip."""
-    today = datetime.date.today()
+  def _skipped_user_ids_for_date(self, date: datetime.date) -> set:
+    """Return the set of user IDs that have a skip active on the given date."""
+    date_str = date.isoformat()
     return {
       e['user_id'] for e in self.skips
-      if datetime.date.fromisoformat(e['until']) > today
+      if e.get('date') == date_str
     }
 
   def _prune_expired_skips(self) -> bool:
-    """Remove skip entries whose 'until' date has passed.
+    """Remove skip entries whose date has already passed.
+
+    A skip is active on the specific date it is assigned. It expires at midnight
+    when that date is no longer today.
 
     Returns:
       bool: True if any entries were removed, False otherwise.
@@ -44,7 +47,7 @@ class Scheduler:
     before = len(self.skips)
     self.skips = [
       e for e in self.skips
-      if datetime.date.fromisoformat(e['until']) > today
+      if datetime.date.fromisoformat(e['date']) >= today
     ]
     pruned = len(self.skips) < before
     if pruned:
@@ -81,15 +84,32 @@ class Scheduler:
     determine which dates a member 'owns' when checking for redundant or
     member-linked swap entries.
     """
-    active_ids = self._active_skip_ids()
-    available = [u for u in self.base_queue if u.id not in active_ids]
-    if not available:
-      available = self.base_queue
-    if not available:
+    if not self.base_queue:
       raise ValueError('No members in the schedule queue.')
+
     start = datetime.date.fromisoformat(self.start_date)
+    if date < start:
+      return self.base_queue[(date - start).days % len(self.base_queue)]
+
     days_elapsed = (date - start).days
-    return available[days_elapsed % len(available)]
+    current_idx = 0
+    for day in range(days_elapsed + 1):
+      date_for_day = start + datetime.timedelta(days=day)
+      while True:
+        user = self.base_queue[current_idx % len(self.base_queue)]
+        skipped_ids = self._skipped_user_ids_for_date(date_for_day)
+        # If all queue members are skipped on this day, avoid infinite loop
+        # by temporarily ignoring skips.
+        if len(skipped_ids) >= len(self.base_queue):
+          break
+        if user.id not in skipped_ids:
+          break
+        current_idx += 1
+      
+      if day < days_elapsed:
+        current_idx += 1
+
+    return self.base_queue[current_idx % len(self.base_queue)]
 
   # ------------------------------------------------------------------
   # Persistence
@@ -128,7 +148,8 @@ class Scheduler:
         self._logger.info(
           'Legacy state file detected. Preserving queue order; '
           'resetting swaps, skips, and start_date to today.')
-        saved_ids = data.get('base_queue', data.get('queue', []))
+        raw_queue = data.get('base_queue', data.get('queue', []))
+        saved_ids = [item['id'] if isinstance(item, dict) else item for item in raw_queue]
         user_map = {u.id: u for u in users}
         saved_ids_set = set(saved_ids)
         self.base_queue = (
@@ -144,10 +165,19 @@ class Scheduler:
       # -- Current format ----------------------------------------------
       self.start_date = data['start_date']
       self.swaps = data.get('swaps', [])
-      self.skips = data.get('skips', [])
+
+      state_changed = False
+      raw_skips = data.get('skips', [])
+      self.skips = []
+      for entry in raw_skips:
+        if isinstance(entry, dict) and 'date' in entry:
+          self.skips.append(entry)
+        else:
+          state_changed = True
 
       # -- Base queue --------------------------------------------------
-      saved_ids = data.get('base_queue', data.get('queue', []))
+      raw_queue = data.get('base_queue', data.get('queue', []))
+      saved_ids = [item['id'] if isinstance(item, dict) else item for item in raw_queue]
       current_user_ids = {u.id for u in users}
       user_map = {u.id: u for u in users}
 
@@ -160,7 +190,6 @@ class Scheduler:
       new_queue += added_users
       self.base_queue = new_queue   # always assign, even if empty
 
-      state_changed = False
       if removed_ids or added_users:
         state_changed = True
         self._logger.info(
@@ -197,11 +226,32 @@ class Scheduler:
   def save_state(self):
     """Save the schedule state to disk."""
     try:
+      # Helper to find a name by user_id
+      def get_name(user_id):
+        user = next((u for u in self.base_queue if u.id == user_id), None)
+        return user.name if user else "Unknown"
+
+      formatted_swaps = []
+      for entry in self.swaps:
+        formatted_swaps.append({
+          'date': entry['date'],
+          'user_id': entry['user_id'],
+          'name': get_name(entry['user_id'])
+        })
+
+      formatted_skips = []
+      for entry in self.skips:
+        formatted_skips.append({
+          'user_id': entry['user_id'],
+          'name': get_name(entry['user_id']),
+          'date': entry['date']
+        })
+
       data = {
         'start_date': self.start_date,
-        'swaps': self.swaps,
-        'skips': self.skips,
-        'base_queue': [u.id for u in self.base_queue]
+        'swaps': formatted_swaps,
+        'skips': formatted_skips,
+        'base_queue': [{'id': u.id, 'name': u.name} for u in self.base_queue]
       }
       with open(self._state_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
@@ -289,10 +339,10 @@ class Scheduler:
       table_str += '\nSkipped members:\n'
       for entry in self.skips:
         uid = entry['user_id']
-        until = entry['until']
+        date_str = entry['date']
         user_obj = next((u for u in self.base_queue if u.id == uid), None)
         name = util.discord_name(user_obj) if user_obj else str(uid)
-        table_str += '- {} (until {})\n'.format(name, until)
+        table_str += '- {} (on {})\n'.format(name, date_str)
       table_str += '\nRun `!skip reset` to reset all skipped entries.\n'
 
     # Footer matches the table: only when swaps fall within the 7-day window
@@ -343,10 +393,10 @@ class Scheduler:
     self.save_state()
 
   def skip(self, member: discord.Member) -> bool:
-    """Skip the member for today, or remove their skip if one is already active.
+    """Skip the member for their next appearance, or remove their skip if one is already active.
 
-    The skip is stored as {"user_id": <id>, "until": "<YYYY-MM-DD>"} where
-    'until' is exclusive: the skip is active while today < until.
+    The skip is stored as {"user_id": <id>, "date": "<YYYY-MM-DD>"} where the date represents
+    the specific day the member's turn is skipped.
 
     Returns:
       bool: True if newly skipped, False if the existing skip was removed.
@@ -357,12 +407,10 @@ class Scheduler:
 
     if existing is not None:
       self.skips.remove(existing)
-      self._logger.info('Removed skip for {} (was until {}).'.format(
-        util.discord_name(member), existing['until']))
+      self._logger.info('Removed skip for {} (was on {}).'.format(
+        util.discord_name(member), existing['date']))
       self.save_state()
       return False
-
-    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
 
     # Undo any swaps that involve this member — either as the person swapped
     # in to a date, or as the skip-aware effective owner of a date who was
@@ -374,9 +422,11 @@ class Scheduler:
             datetime.date.fromisoformat(e['date'])).id != member.id
     ]
 
-    self.skips.append({'user_id': member.id, 'until': tomorrow})
-    self._logger.info('Skipped {} until {}.'.format(
-      util.discord_name(member), tomorrow))
+    next_appearance_date = self.get_next_appearance_date(member)
+
+    self.skips.append({'user_id': member.id, 'date': next_appearance_date})
+    self._logger.info('Skipped {} on {}.'.format(
+      util.discord_name(member), next_appearance_date))
     self.save_state()
     return True
 

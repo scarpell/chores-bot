@@ -265,22 +265,22 @@ class SchedulerTestCase(unittest.TestCase):
   # ------------------------------------------------------------------
 
   def test_skip_active_removes_user_from_rotation(self):
-    """An active skip should push the user out of each day's slot."""
+    """An active skip should push the user out of only their next appearance slot."""
     sch = self.make_scheduler()
     self.assertEqual(sch.get_user_for_day(0).id, 111)  # Alice
     self.assertEqual(sch.get_user_for_day(1).id, 222)  # Bob
     self.assertEqual(sch.get_user_for_day(2).id, 333)  # Charlie
 
-    result = sch.skip(self.users[1])  # Skip Bob
+    result = sch.skip(self.users[1])  # Skip Bob (next appearance is Day 1)
     self.assertTrue(result)
     self.assertTrue(any(e['user_id'] == 222 for e in sch.skips))
 
-    # With Bob removed from the rotation: [Alice, Charlie, David] cycle
+    # Bob is skipped only on Day 1:
     self.assertEqual(sch.get_user_for_day(0).id, 111)  # Alice
-    self.assertEqual(sch.get_user_for_day(1).id, 333)  # Charlie
+    self.assertEqual(sch.get_user_for_day(1).id, 333)  # Charlie (Bob is skipped)
     self.assertEqual(sch.get_user_for_day(2).id, 444)  # David
     self.assertEqual(sch.get_user_for_day(3).id, 111)  # Alice wraps
-    self.assertEqual(sch.get_user_for_day(4).id, 333)  # Charlie again
+    self.assertEqual(sch.get_user_for_day(4).id, 222)  # Bob is back!
 
   def test_skip_toggle_removes_active_skip(self):
     sch = self.make_scheduler()
@@ -296,12 +296,12 @@ class SchedulerTestCase(unittest.TestCase):
     sch = self.make_scheduler()
 
     # Write an already-expired skip for Bob
-    yesterday = self.today().isoformat()  # today is not > today → expired
+    yesterday = (self.today() - datetime.timedelta(days=1)).isoformat()
     with open(sch._state_file, 'w') as f:
       json.dump({
         'start_date': sch.start_date,
         'swaps': [],
-        'skips': [{'user_id': 222, 'until': yesterday}],
+        'skips': [{'user_id': 222, 'date': yesterday}],
         'base_queue': [u.id for u in self.users]
       }, f)
 
@@ -313,7 +313,7 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertTrue(result, "Expected a NEW skip since the old one expired")
     active = [e for e in sch.skips if e['user_id'] == 222]
     self.assertEqual(len(active), 1)
-    self.assertEqual(active[0]['until'], self.date_offset(1))
+    self.assertEqual(active[0]['date'], self.date_offset(1))
 
   def test_skip_persistence(self):
     sch = self.make_scheduler()
@@ -396,6 +396,59 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertEqual(sch2.skips, [])
     # Rotation restarts from today
     self.assertEqual(sch2.start_date, self.today().isoformat())
+
+  def test_human_readable_serialization(self):
+    """Verify that usernames are serialized with user IDs on disk."""
+    sch = self.make_scheduler()
+    
+    # Perform a swap and a skip
+    sch.swap(self.users[0], self.users[2])  # Alice (111) and Charlie (333)
+    sch.skip(self.users[1])  # Bob (222)
+    
+    # Force saving state if not already saved
+    sch.save_state()
+    
+    # Read raw JSON from disk
+    self.assertTrue(sch._state_file.exists())
+    with open(sch._state_file, 'r', encoding='utf-8') as f:
+      data = json.load(f)
+      
+    # Check base_queue
+    base_queue_data = data.get('base_queue', [])
+    self.assertEqual(len(base_queue_data), len(self.users))
+    for entry in base_queue_data:
+      self.assertIn('id', entry)
+      self.assertIn('name', entry)
+      # Find original user to match the name
+      orig_user = next(u for u in self.users if u.id == entry['id'])
+      self.assertEqual(entry['name'], orig_user.name)
+      
+    # Check swaps
+    swaps_data = data.get('swaps', [])
+    self.assertEqual(len(swaps_data), 2)
+    for entry in swaps_data:
+      self.assertIn('date', entry)
+      self.assertIn('user_id', entry)
+      self.assertIn('name', entry)
+      orig_user = next(u for u in self.users if u.id == entry['user_id'])
+      self.assertEqual(entry['name'], orig_user.name)
+      
+    # Check skips
+    skips_data = data.get('skips', [])
+    self.assertEqual(len(skips_data), 1)
+    entry = skips_data[0]
+    self.assertIn('date', entry)
+    self.assertIn('user_id', entry)
+    self.assertIn('name', entry)
+    self.assertEqual(entry['user_id'], 222)
+    self.assertEqual(entry['name'], 'Bob')
+
+    # Now verify we can load it back correctly
+    sch2 = self.make_scheduler()
+    self.assertEqual(len(sch2.skips), 1)
+    self.assertEqual(sch2.skips[0]['user_id'], 222)
+    self.assertEqual(len(sch2.swaps), 2)
+
 
 
 if __name__ == '__main__':
