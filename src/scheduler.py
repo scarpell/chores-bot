@@ -149,7 +149,7 @@ class Scheduler:
           'Legacy state file detected. Preserving queue order; '
           'resetting swaps, skips, and start_date to today.')
         raw_queue = data.get('base_queue', data.get('queue', []))
-        saved_ids = [item['id'] if isinstance(item, dict) else item for item in raw_queue]
+        saved_ids = [int(item['id']) if isinstance(item, dict) else int(item) for item in raw_queue]
         user_map = {u.id: u for u in users}
         saved_ids_set = set(saved_ids)
         self.base_queue = (
@@ -164,20 +164,32 @@ class Scheduler:
 
       # -- Current format ----------------------------------------------
       self.start_date = data['start_date']
-      self.swaps = data.get('swaps', [])
+      
+      self.swaps = []
+      for e in data.get('swaps', []):
+        if isinstance(e, dict) and 'user_id' in e:
+          self.swaps.append({
+            'date': e['date'],
+            'user_id': int(e['user_id']),
+            'name': e.get('name', '')
+          })
 
       state_changed = False
       raw_skips = data.get('skips', [])
       self.skips = []
       for entry in raw_skips:
-        if isinstance(entry, dict) and 'date' in entry:
-          self.skips.append(entry)
+        if isinstance(entry, dict) and 'date' in entry and 'user_id' in entry:
+          self.skips.append({
+            'user_id': int(entry['user_id']),
+            'date': entry['date'],
+            'name': entry.get('name', '')
+          })
         else:
           state_changed = True
 
       # -- Base queue --------------------------------------------------
       raw_queue = data.get('base_queue', data.get('queue', []))
-      saved_ids = [item['id'] if isinstance(item, dict) else item for item in raw_queue]
+      saved_ids = [int(item['id']) if isinstance(item, dict) else int(item) for item in raw_queue]
       current_user_ids = {u.id for u in users}
       user_map = {u.id: u for u in users}
 
@@ -369,6 +381,32 @@ class Scheduler:
     if mem1.id == mem2.id:
       raise ValueError('Members need to be different.')
 
+    # Check if either member is currently skipped
+    for mem in (mem1, mem2):
+      if any(e['user_id'] == mem.id for e in self.skips):
+        raise ValueError('{} is currently skipped and cannot be swapped.'.format(
+          util.discord_name(mem)))
+
+    # Check if either member is already involved in a swap
+    # (Allowing the case where they are swapped with each other, which cancels the swap)
+    swaps_mem1 = [e for e in self.swaps if e['user_id'] == mem1.id]
+    swaps_mem2 = [e for e in self.swaps if e['user_id'] == mem2.id]
+    
+    is_swap_back = False
+    if len(swaps_mem1) == 1 and len(swaps_mem2) == 1:
+      entry1 = swaps_mem1[0]
+      entry2 = swaps_mem2[0]
+      owner1 = self._get_effective_user_for_date(datetime.date.fromisoformat(entry1['date']))
+      owner2 = self._get_effective_user_for_date(datetime.date.fromisoformat(entry2['date']))
+      if owner1.id == mem2.id and owner2.id == mem1.id:
+        is_swap_back = True
+
+    if not is_swap_back:
+      for mem in (mem1, mem2):
+        if any(e['user_id'] == mem.id for e in self.swaps):
+          raise ValueError('{} is already swapped and cannot be swapped again.'.format(
+            util.discord_name(mem)))
+
     date1_str = self.get_next_appearance_date(mem1)
     date2_str = self.get_next_appearance_date(mem2)
 
@@ -412,15 +450,10 @@ class Scheduler:
       self.save_state()
       return False
 
-    # Undo any swaps that involve this member — either as the person swapped
-    # in to a date, or as the skip-aware effective owner of a date who was
-    # swapped out.
-    self.swaps = [
-      e for e in self.swaps
-      if e['user_id'] != member.id
-      and self._get_effective_user_for_date(
-            datetime.date.fromisoformat(e['date'])).id != member.id
-    ]
+    # Check if the member is currently swapped
+    if any(e['user_id'] == member.id for e in self.swaps):
+      raise ValueError('{} is currently swapped and cannot be skipped.'.format(
+        util.discord_name(member)))
 
     next_appearance_date = self.get_next_appearance_date(member)
 

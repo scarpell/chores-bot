@@ -339,21 +339,27 @@ class SchedulerTestCase(unittest.TestCase):
     table_after = sch.generate_schedule()
     self.assertNotIn("Skipped members:", table_after)
 
-  def test_skip_undoes_swaps_first(self):
+  def test_skip_fails_for_swapped_user(self):
+    """Attempting to skip a swapped user should raise a ValueError."""
     sch = self.make_scheduler()
-
-    # Alice (day 0) swaps with Bob (day 1)
     sch.swap(self.users[0], self.users[1])
-    self.assertEqual(len(sch.swaps), 2)
+    with self.assertRaises(ValueError):
+      sch.skip(self.users[0])
 
-    # Skip Alice — should undo both swap entries
+  def test_swap_fails_for_skipped_user(self):
+    """Attempting to swap a skipped user should raise a ValueError."""
+    sch = self.make_scheduler()
     sch.skip(self.users[0])
-    self.assertEqual(sch.swaps, [])
-    self.assertTrue(any(e['user_id'] == 111 for e in sch.skips))
+    with self.assertRaises(ValueError):
+      sch.swap(self.users[0], self.users[1])
 
-    # With Alice skipped, available = [Bob, Charlie, David]
-    self.assertEqual(sch.get_user_for_day(0).id, 222)  # Bob
-    self.assertEqual(sch.get_user_for_day(1).id, 333)  # Charlie
+  def test_swap_fails_for_already_swapped_user(self):
+    """Attempting to swap a user who is already swapped (with someone else) should raise a ValueError."""
+    sch = self.make_scheduler()
+    sch.swap(self.users[0], self.users[1])  # Alice and Bob
+    # Now try to swap Bob and Charlie - should fail because Bob is already swapped
+    with self.assertRaises(ValueError):
+      sch.swap(self.users[1], self.users[2])
 
   # ------------------------------------------------------------------
   # Migration
