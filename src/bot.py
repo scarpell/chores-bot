@@ -111,15 +111,24 @@ async def on_ready():
     logger.error("Channel {} not found.".format(channel_id))
     return
 
+  # 1. Fetch current members from Discord
   users = get_chore_members()
   if users is None:
     logger.error("Failed to fetch chore members during startup.")
     users = []
 
+  # 2. Load (or initialize) all schedule state from disk.
+  # Only construct the Scheduler once — on reconnect, reuse the existing
+  # instance and just reload state so the notify loop stays intact.
   global sch
-  sch = scheduler.Scheduler(users)
+  if sch is None:
+    sch = scheduler.Scheduler()
+  sch.load_state(users)
 
-  notify.start()
+  # 3. Start the scheduler loop — only runs after state is fully loaded.
+  # Guard against reconnects: on_ready can fire more than once.
+  if not notify.is_running():
+    notify.start()
   return
 
 
@@ -211,16 +220,10 @@ async def skip(ctx, arg: str = None):
     await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
     return
 
-  # Try converting the argument to a Member
   try:
     member = await commands.MemberConverter().convert(ctx, arg)
   except commands.MemberNotFound:
-    # If conversion fails, let's output a usage message
-    await ctx.message.channel.send(
-      '**Usage:**\n'
-      '- `!skip @username` (skips the next appearance of the specified user)\n'
-      '- `!skip reset` (resets all active skipped entries)'
-    )
+    await ctx.message.channel.send('Could not find member: {}'.format(arg))
     return
 
   try:
@@ -252,12 +255,9 @@ async def notify():
     await _default_channel.send(
       '<@{}> is responsible for the dishes today'.format(
         sch.on_call.id))
-  elif curr_time.hour == 0:
-    sch.rotate()
+    logger.info('{} has been notified.'.format(util.discord_name(sch.on_call)))
   else:
     logger.info('Notification suppressed.')
-
-  logger.info('{} has been notified.'.format(util.discord_name(sch.on_call)))
   return
 
 
@@ -284,8 +284,7 @@ async def on_command_error(ctx, error):
   elif isinstance(error, commands.MissingRequiredArgument):
     await ctx.send("Missing required argument: {}".format(error.param.name))
   else:
-    logger.error("Ignoring exception in command {}: {}".format(ctx.command, error))
-    await bot.on_command_error(ctx, error)
+    logger.error('Unhandled exception in command {}: {}'.format(ctx.command, error))
 
 
 if __name__ == '__main__':
