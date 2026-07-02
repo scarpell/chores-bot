@@ -517,6 +517,48 @@ class SchedulerTestCase(unittest.TestCase):
     # Ensure Alice is back on Thursday
     self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice on Thursday
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
+  def test_skip_order_independence(self):
+    """If Bob is on 7/2 and Alice on 7/3:
+    Skipping Alice (7/3) then Bob (7/2) should yield the same correct schedule
+    as skipping Bob (7/2) then Alice (7/2): Alice should not show up on 7/2.
+    """
+    # 7/2 is Thursday, 7/3 is Friday
+    MockDate._today_val = datetime.date(2026, 7, 2)
+    
+    # base_queue: Bob (222), Alice (111), Charlie (333), David (444)
+    # Start date is today (7/2)
+    users = [self.users[1], self.users[0], self.users[2], self.users[3]]
+    sch = self.make_scheduler(users)
+    
+    # Verify starting rotation order:
+    # 7/2 (offset 0): Bob
+    # 7/3 (offset 1): Alice
+    # 7/4 (offset 2): Charlie
+    # 7/5 (offset 3): David
+    self.assertEqual(sch.get_user_for_day(0).id, 222) # Bob
+    self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice
+    self.assertEqual(sch.get_user_for_day(2).id, 333) # Charlie
+    self.assertEqual(sch.get_user_for_day(3).id, 444) # David
+    
+    # Skip Alice first (should get skip date 7/3)
+    sch.skip(self.users[0])
+    self.assertEqual(sch.skips[0]['date'], self.date_offset(1)) # 7/3
+    
+    # Skip Bob second (should get skip date 7/2)
+    sch.skip(self.users[1])
+    self.assertEqual(sch.skips[1]['date'], self.date_offset(0)) # 7/2
+    
+    # Ensure Alice does NOT show up on 7/2!
+    # On 7/2 (offset 0), Charlie should be on call (Bob and Alice both skipped)
+    self.assertEqual(sch.get_user_for_day(0).id, 333) # Charlie
+    # On 7/3 (offset 1), David should be on call (Alice skipped)
+    self.assertEqual(sch.get_user_for_day(1).id, 444) # David
+    # On 7/4 (offset 2), Bob is back and next in queue
+    self.assertEqual(sch.get_user_for_day(2).id, 222) # Bob
+    # On 7/5 (offset 3), Alice is back
+    self.assertEqual(sch.get_user_for_day(3).id, 111) # Alice
+
 
 if __name__ == '__main__':
   unittest.main()

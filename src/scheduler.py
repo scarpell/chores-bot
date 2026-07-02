@@ -27,11 +27,10 @@ class Scheduler:
   # ------------------------------------------------------------------
 
   def _skipped_user_ids_for_date(self, date: datetime.date) -> set:
-    """Return the set of user IDs that have a skip active on the given date."""
-    date_str = date.isoformat()
+    """Return the set of user IDs that have a skip active on or after the given date."""
     return {
       e['user_id'] for e in self.skips
-      if e.get('date') == date_str
+      if datetime.date.fromisoformat(e['date']) >= date
     }
 
   def _prune_expired_skips(self) -> bool:
