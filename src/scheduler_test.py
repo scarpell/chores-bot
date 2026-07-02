@@ -8,6 +8,14 @@ import scheduler
 import util
 
 
+class MockDate(datetime.date):
+  _today_val = datetime.date(2026, 7, 6)
+
+  @classmethod
+  def today(cls):
+    return cls._today_val
+
+
 class MockMember:
   def __init__(self, id, name, nick=None):
     self.id = id
@@ -455,6 +463,59 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertEqual(sch2.skips[0]['user_id'], 222)
     self.assertEqual(len(sch2.swaps), 2)
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
+  def test_user_requested_swap_scenario(self):
+    """Test user requested scenario:
+    - Monday: Bob is Tuesday, Alice is Thursday. Swap Bob and Alice.
+      Verify Alice is Tuesday, Bob is Thursday.
+    - Wednesday: Verify Bob is still Thursday (expired Tuesday swap pruned, Thursday swap survives).
+    - Wednesday: Run !swap reset. Verify Alice is back on Thursday.
+    """
+    # Set up members: Charlie, Bob, David, Alice
+    # Users will be: Charlie (333), Bob (222), David (444), Alice (111)
+    users = [
+      self.users[2], # Charlie (333)
+      self.users[1], # Bob (222)
+      self.users[3], # David (444)
+      self.users[0]  # Alice (111)
+    ]
+    
+    # 1. Today is Monday (2026-07-06)
+    MockDate._today_val = datetime.date(2026, 7, 6)
+    
+    sch = self.make_scheduler(users)
+    
+    # Verify starting rotation order:
+    # Monday (offset 0): Charlie
+    # Tuesday (offset 1): Bob
+    # Wednesday (offset 2): David
+    # Thursday (offset 3): Alice
+    self.assertEqual(sch.get_user_for_day(0).id, 333) # Charlie
+    self.assertEqual(sch.get_user_for_day(1).id, 222) # Bob
+    self.assertEqual(sch.get_user_for_day(2).id, 444) # David
+    self.assertEqual(sch.get_user_for_day(3).id, 111) # Alice
+    
+    # Swap Bob and Alice
+    sch.swap(self.users[1], self.users[0]) # Bob (222) and Alice (111)
+    
+    # Ensure Alice is now Tuesday, Bob is Thursday
+    self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice on Tuesday (offset 1)
+    self.assertEqual(sch.get_user_for_day(3).id, 222) # Bob on Thursday (offset 3)
+    
+    # 2. Today is Wednesday (2026-07-08)
+    MockDate._today_val = datetime.date(2026, 7, 8)
+    
+    # Reload/Sync state (which prunes expired swaps like Tuesday's)
+    sch.load_state(users)
+    
+    # Ensure Bob is still Thursday (Thursday is tomorrow, offset 1 relative to Wednesday)
+    self.assertEqual(sch.get_user_for_day(1).id, 222) # Bob on Thursday
+    
+    # Run swap reset
+    sch.reset_swaps()
+    
+    # Ensure Alice is back on Thursday
+    self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice on Thursday
 
 
 if __name__ == '__main__':
