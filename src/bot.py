@@ -150,59 +150,6 @@ async def schedule(ctx):
   return
 
 
-@bot.command(name='swap', help='Swap on call position with chosen person or reset swaps')
-async def swap(ctx, arg1: str = None, arg2: str = None):
-  if arg1 is None:
-    await ctx.message.channel.send(
-      '**Usage:**\n'
-      '- `!swap @username1 @username2` (trades the upcoming days of two people)\n'
-      '- `!swap reset` (resets all active swapped entries)'
-    )
-    return
-
-  if arg1.lower() == 'reset':
-    sch.reset_swaps()
-    await ctx.message.channel.send('All swapped entries have been reset! The new schedule '
-                                  'is as follows:')
-    await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
-    return
-
-  if arg2 is None:
-    await ctx.message.channel.send(
-      '**Usage:**\n'
-      '- `!swap @username1 @username2` (trades the upcoming days of two people)\n'
-      '- `!swap reset` (resets all active swapped entries)'
-    )
-    return
-
-  # Convert arg1 to a Member
-  try:
-    member1 = await commands.MemberConverter().convert(ctx, arg1)
-  except commands.MemberNotFound:
-    await ctx.message.channel.send('Could not find member: {}'.format(arg1))
-    return
-
-  # Convert arg2 to a Member
-  try:
-    member2 = await commands.MemberConverter().convert(ctx, arg2)
-  except commands.MemberNotFound:
-    await ctx.message.channel.send('Could not find member: {}'.format(arg2))
-    return
-
-  try:
-    sch.swap(member1, member2)
-    await ctx.message.channel.send('Users have been switched! The new schedule '
-                                  'should be as follows:')
-    await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
-  except ValueError as e:
-    await ctx.message.channel.send(str(e))
-  except Exception as e:
-    logger.error('Error in swap command: {}'.format(e))
-    await ctx.message.channel.send('There was an error when trying to swap.')
-
-  return
-
-
 @bot.command(name='skip', help='Skip the next appearance of a user or reset skips')
 async def skip(ctx, arg: str = None):
   if arg is None:

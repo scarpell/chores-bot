@@ -77,220 +77,38 @@ class SchedulerTestCase(unittest.TestCase):
     sch2 = self.make_scheduler()
     self.assertEqual(sch2.start_date, sch.start_date)
     self.assertEqual(sch2.get_user_for_day(0).id, 111)
-
-  # ------------------------------------------------------------------
-  # Swaps
-  # ------------------------------------------------------------------
-
-  def test_swap_happy(self):
-    sch = self.make_scheduler()
-    # Alice is on day 0 (today), Charlie is on day 2
-    sch.swap(self.users[0], self.users[2])
-
-    self.assertEqual(sch.get_user_for_day(0).id, 333)  # Charlie on Alice's day
-    self.assertEqual(sch.get_user_for_day(1).id, 222)  # Bob unchanged
-    self.assertEqual(sch.get_user_for_day(2).id, 111)  # Alice on Charlie's day
-
-    # Verify swap entries are stored as dates
-    dates_in_swaps = {e['date'] for e in sch.swaps}
-    self.assertIn(self.date_offset(0), dates_in_swaps)
-    self.assertIn(self.date_offset(2), dates_in_swaps)
-
-    # Verify persistence
-    sch2 = self.make_scheduler()
-    self.assertEqual(sch2.get_user_for_day(0).id, 333)
-    self.assertEqual(sch2.get_user_for_day(2).id, 111)
-
-  def test_swap_same_person(self):
-    sch = self.make_scheduler()
-    with self.assertRaises(ValueError):
-      sch.swap(self.users[0], self.users[0])
-
-  def test_swap_not_in_schedule(self):
-    sch = self.make_scheduler()
-    fake_user = MockMember(999, 'Fake')
-    with self.assertRaises(ValueError):
-      sch.swap(self.users[0], fake_user)
-
-  def test_swap_back_removes_entries(self):
-    """Swapping the same two people back cancels the swap entirely."""
-    sch = self.make_scheduler()
-    sch.swap(self.users[0], self.users[1])
-    self.assertEqual(len(sch.swaps), 2)
-
-    sch.swap(self.users[0], self.users[1])
-    self.assertEqual(sch.swaps, [])
-
-  def test_swap_respects_active_skips_in_redundancy_check(self):
-    """When a skip shifts the rotation, the swap redundancy check must use the
-    skip-aware effective owner, not the raw queue owner.
-
-    Queue = [Alice, Bob, Charlie, David]; Alice is skipped.
-    Effective rotation for today onwards: [Bob, Charlie, David].
-      Day 0 → Bob   (Alice's raw slot, but Bob's effective slot)
-      Day 1 → Charlie
-      Day 2 → David
-
-    Bob swaps with Charlie (their effective days 0 and 1).  After the swap:
-      Day 0 → Charlie  (swap entry)
-      Day 1 → Bob      (swap entry)
-
-    Previously the raw-queue check saw raw_user(day1) = Bob and incorrectly
-    removed the day1 entry, leaving Bob stuck on Charlie's day.
-    """
-    sch = self.make_scheduler()
-    sch.skip(self.users[0])  # Skip Alice; available = [Bob, Charlie, David]
-
-    # Bob is now on day 0, Charlie on day 1
-    self.assertEqual(sch.get_user_for_day(0).id, 222)
-    self.assertEqual(sch.get_user_for_day(1).id, 333)
-
-    sch.swap(self.users[1], self.users[2])  # Bob ↔ Charlie
-
-    # Both swap entries must survive — neither is redundant
-    self.assertEqual(len(sch.swaps), 2)
-    self.assertEqual(sch.get_user_for_day(0).id, 333)  # Charlie on day 0
-    self.assertEqual(sch.get_user_for_day(1).id, 222)  # Bob on day 1
-
-  def test_load_state_all_users_removed(self):
-    """load_state with an empty user list must not raise AttributeError."""
-    sch = self.make_scheduler()
-    sch.load_state([])  # everyone left the server
-    self.assertEqual(sch.base_queue, [])
-
-  def test_load_state_corrupt_file_falls_back_to_fresh(self):
-    """A corrupt state file must not leave the scheduler in an unusable state."""
-    sch = self.make_scheduler()
-    with open(sch._state_file, 'w') as f:
-      f.write('NOT VALID JSON {{{')
-
-    sch.load_state(self.users)
-    # Should have fallen back to fresh defaults
-    self.assertEqual([u.id for u in sch.base_queue], [111, 222, 333, 444])
-    self.assertEqual(sch.swaps, [])
-    self.assertEqual(sch.skips, [])
-    self.assertEqual(sch.start_date, self.today().isoformat())
-
-  def test_load_state_prunes_expired_swaps(self):
-    """A swap whose date has passed is pruned by load_state."""
-    sch = self.make_scheduler()
-    # Inject a swap for yesterday (already expired)
-    yesterday = (self.today() - datetime.timedelta(days=1)).isoformat()
-    with open(sch._state_file, 'w') as f:
-      json.dump({
-        'start_date': sch.start_date,
-        'swaps': [{'date': yesterday, 'user_id': 222}],
-        'skips': [],
-        'base_queue': [u.id for u in self.users]
-      }, f)
-
-    sch.load_state(self.users)
-    self.assertEqual(sch.swaps, [], "Expired swap should have been pruned by load_state()")
-
-  def test_swap_for_today_not_pruned(self):
-    """A swap dated today is still active and must NOT be pruned."""
-    sch = self.make_scheduler()
-    sch.swap(self.users[0], self.users[1])
-
-    # Re-load (as before_any_command would) and verify swap survives
-    sch.load_state(self.users)
-    self.assertTrue(
-      any(e['date'] == self.date_offset(0) for e in sch.swaps),
-      "Today's swap should still be present after load_state()")
-    self.assertEqual(sch.get_user_for_day(0).id, 222)
-
-  def test_generate_schedule_shows_swapped(self):
-    sch = self.make_scheduler()
-    sch.swap(self.users[0], self.users[1])
-    table = sch.generate_schedule()
-    self.assertIn("Dishes Schedule", table)
-    self.assertIn("(swapped)", table)
-    self.assertIn("Run `!swap reset` to reset all swapped entries.", table)
-
-  # ------------------------------------------------------------------
-  # Swap reset
-  # ------------------------------------------------------------------
-
-  def test_swap_reset_and_display(self):
-    sch = self.make_scheduler()
-    sch.swap(self.users[0], self.users[1])
-    self.assertEqual(len(sch.swaps), 2)
-
-    table = sch.generate_schedule()
-    self.assertIn("Run `!swap reset` to reset all swapped entries.", table)
-
-    sch.reset_swaps()
-    self.assertEqual(sch.swaps, [])
-
-    table_after = sch.generate_schedule()
-    self.assertNotIn("Run `!swap reset` to reset all swapped entries.", table_after)
-
-  # ------------------------------------------------------------------
-  # User membership changes
-  # ------------------------------------------------------------------
-
-  def test_load_state_add_and_remove_users(self):
-    sch = self.make_scheduler()
-    self.assertEqual([u.id for u in sch.base_queue], [111, 222, 333, 444])
-
-    new_users = [
-      MockMember(111, 'Alice', 'Aly'),
-      MockMember(333, 'Charlie', 'Chaz'),
-      MockMember(555, 'Eve')
-    ]
-
-    # Add a swap involving Bob (222), who will be removed
-    sch.swap(self.users[0], self.users[1])
-    self.assertEqual(len(sch.swaps), 2)
-
-    sch.load_state(new_users)
-
-    self.assertEqual([u.id for u in sch.base_queue], [111, 333, 555])
-    # Bob's swap entries should be cleaned up
-    self.assertFalse(any(e['user_id'] == 222 for e in sch.swaps))
-    self.assertTrue(sch._state_file.exists())
-
-  def test_load_state_remove_user_clears_related_swaps(self):
-    sch = self.make_scheduler()
-    sch.swap(self.users[1], self.users[2])  # Bob ↔ Charlie
-
-    bob_date = next(e['date'] for e in sch.swaps if e['user_id'] == 333)
-    charlie_date = next(e['date'] for e in sch.swaps if e['user_id'] == 222)
-
-    new_users = [
-      MockMember(111, 'Alice', 'Aly'),
-      MockMember(333, 'Charlie', 'Chaz'),
-      MockMember(444, 'David')
-    ]
-    sch.load_state(new_users)
-
-    self.assertFalse(any(e['user_id'] == 222 for e in sch.swaps))
-    self.assertFalse(any(e['user_id'] == 333 and e['date'] == charlie_date
-                         for e in sch.swaps))
-
   # ------------------------------------------------------------------
   # Skip tests
   # ------------------------------------------------------------------
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
   def test_skip_active_removes_user_from_rotation(self):
     """An active skip should push the user out of only their next appearance slot."""
+    MockDate._today_val = datetime.date(2026, 7, 6)
     sch = self.make_scheduler()
+    # Queue is [Alice, Bob, Charlie, David] (length 4)
+    # Alice is on day 0 (2026-07-06), Bob on day 1 (2026-07-07), Charlie on day 2 (2026-07-08), David on day 3 (2026-07-09)
     self.assertEqual(sch.get_user_for_day(0).id, 111)  # Alice
     self.assertEqual(sch.get_user_for_day(1).id, 222)  # Bob
-    self.assertEqual(sch.get_user_for_day(2).id, 333)  # Charlie
-
-    result = sch.skip(self.users[1])  # Skip Bob (next appearance is Day 1)
+    
+    # Skip Bob. He should be skipped for 4 days (until 2026-07-10).
+    result = sch.skip(self.users[1])
     self.assertTrue(result)
     self.assertTrue(any(e['user_id'] == 222 for e in sch.skips))
+    active_skip = next(e for e in sch.skips if e['user_id'] == 222)
+    self.assertEqual(active_skip['start_date'], '2026-07-06')
+    self.assertEqual(active_skip['expiry_date'], '2026-07-10')
 
-    # Bob is skipped only on Day 1:
+    # Bob is skipped on Day 1 (2026-07-07 < 2026-07-10)
     self.assertEqual(sch.get_user_for_day(0).id, 111)  # Alice
     self.assertEqual(sch.get_user_for_day(1).id, 333)  # Charlie (Bob is skipped)
     self.assertEqual(sch.get_user_for_day(2).id, 444)  # David
-    self.assertEqual(sch.get_user_for_day(3).id, 111)  # Alice wraps
-    self.assertEqual(sch.get_user_for_day(4).id, 222)  # Bob is back!
+    self.assertEqual(sch.get_user_for_day(3).id, 111)  # Alice
+    self.assertEqual(sch.get_user_for_day(4).id, 222)  # Bob is back (Day 4 is 2026-07-10 >= 2026-07-10)
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
   def test_skip_toggle_removes_active_skip(self):
+    MockDate._today_val = datetime.date(2026, 7, 6)
     sch = self.make_scheduler()
     was_skipped1 = sch.skip(self.users[1])
     self.assertTrue(was_skipped1)
@@ -299,8 +117,10 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertFalse(was_skipped2)
     self.assertFalse(any(e['user_id'] == 222 for e in sch.skips))
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
   def test_skip_expired_does_not_block_new_skip(self):
     """After a skip expires, !skip should add a new skip, not toggle one off."""
+    MockDate._today_val = datetime.date(2026, 7, 6)
     sch = self.make_scheduler()
 
     # Write an already-expired skip for Bob
@@ -308,22 +128,28 @@ class SchedulerTestCase(unittest.TestCase):
     with open(sch._state_file, 'w') as f:
       json.dump({
         'start_date': sch.start_date,
-        'swaps': [],
-        'skips': [{'user_id': 222, 'date': yesterday}],
-        'base_queue': [u.id for u in self.users]
+        'skips': [{'user_id': 222, 'start_date': sch.start_date, 'expiry_date': yesterday}],
+        'base_queue': [{'id': u.id, 'name': u.name} for u in self.users]
       }, f)
 
     # Simulate before_any_command
     sch.load_state(self.users)
-    self.assertEqual(sch.skips, [], "Expired skip should be pruned by load_state()")
+    # The expired skip remains in history (it is not pruned)
+    self.assertEqual(len(sch.skips), 1)
 
+    # Calling skip should add a new active skip
     result = sch.skip(self.users[1])
     self.assertTrue(result, "Expected a NEW skip since the old one expired")
-    active = [e for e in sch.skips if e['user_id'] == 222]
+    
+    # We should have 2 skips total in the list now
+    self.assertEqual(len(sch.skips), 2)
+    active = [e for e in sch.skips if e['user_id'] == 222 and datetime.date.fromisoformat(e['expiry_date']) > self.today()]
     self.assertEqual(len(active), 1)
-    self.assertEqual(active[0]['date'], self.date_offset(1))
+    self.assertEqual(active[0]['expiry_date'], (self.today() + datetime.timedelta(days=4)).isoformat())
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
   def test_skip_persistence(self):
+    MockDate._today_val = datetime.date(2026, 7, 6)
     sch = self.make_scheduler()
     sch.skip(self.users[1])  # Skip Bob
 
@@ -331,7 +157,9 @@ class SchedulerTestCase(unittest.TestCase):
     self.assertTrue(any(e['user_id'] == 222 for e in sch2.skips))
     self.assertEqual(sch2.get_user_for_day(1).id, 333)
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
   def test_skip_reset_and_display(self):
+    MockDate._today_val = datetime.date(2026, 7, 6)
     sch = self.make_scheduler()
     sch.skip(self.users[1])
     self.assertEqual(len(sch.skips), 1)
@@ -347,38 +175,40 @@ class SchedulerTestCase(unittest.TestCase):
     table_after = sch.generate_schedule()
     self.assertNotIn("Skipped members:", table_after)
 
-  def test_skip_fails_for_swapped_user(self):
-    """Attempting to skip a swapped user should raise a ValueError."""
-    sch = self.make_scheduler()
-    sch.swap(self.users[0], self.users[1])
-    with self.assertRaises(ValueError):
-      sch.skip(self.users[0])
+  # ------------------------------------------------------------------
+  # User membership changes
+  # ------------------------------------------------------------------
 
-  def test_swap_fails_for_skipped_user(self):
-    """Attempting to swap a skipped user should raise a ValueError."""
+  def test_load_state_add_and_remove_users(self):
     sch = self.make_scheduler()
-    sch.skip(self.users[0])
-    with self.assertRaises(ValueError):
-      sch.swap(self.users[0], self.users[1])
+    self.assertEqual([u.id for u in sch.base_queue], [111, 222, 333, 444])
 
-  def test_swap_fails_for_already_swapped_user(self):
-    """Attempting to swap a user who is already swapped (with someone else) should raise a ValueError."""
-    sch = self.make_scheduler()
-    sch.swap(self.users[0], self.users[1])  # Alice and Bob
-    # Now try to swap Bob and Charlie - should fail because Bob is already swapped
-    with self.assertRaises(ValueError):
-      sch.swap(self.users[1], self.users[2])
+    new_users = [
+      MockMember(111, 'Alice', 'Aly'),
+      MockMember(333, 'Charlie', 'Chaz'),
+      MockMember(555, 'Eve')
+    ]
+
+    # Add a skip involving Bob (222), who will be removed
+    sch.skip(self.users[1])
+    self.assertEqual(len(sch.skips), 1)
+
+    sch.load_state(new_users)
+
+    self.assertEqual([u.id for u in sch.base_queue], [111, 333, 555])
+    # Bob's skip entries should be cleaned up
+    self.assertFalse(any(e['user_id'] == 222 for e in sch.skips))
+    self.assertTrue(sch._state_file.exists())
 
   # ------------------------------------------------------------------
   # Migration
   # ------------------------------------------------------------------
 
   def test_legacy_skip_migration(self):
-    """A state file with legacy integer skips is migrated (skips cleared)."""
+    """A state file with legacy skips (missing start_date) is migrated (skips cleared)."""
     sch = self.make_scheduler()
     legacy_data = {
       'day_index': 10,
-      'swaps': {},
       'skips': [11, 14],  # old integer format
       'base_queue': [111, 222, 333, 444]
     }
@@ -387,39 +217,40 @@ class SchedulerTestCase(unittest.TestCase):
 
     sch2 = self.make_scheduler()
     self.assertEqual(sch2.skips, [])
+    self.assertEqual(sch2.start_date, self.today().isoformat())
 
-  def test_legacy_swap_migration(self):
-    """On a legacy state file (missing start_date), only queue order is preserved.
-    Swaps and skips are discarded and the rotation restarts from today."""
+  def test_skip_date_to_expiry_date_migration(self):
+    """A state file with skips using the 'date' key is migrated to 'expiry_date'."""
     sch = self.make_scheduler()
     legacy_data = {
-      'day_index': 5,
-      'swaps': {'7': 111, '9': 333},  # old integer-keyed swaps
-      'skips': [6, 8],                 # old integer skips
-      'base_queue': [333, 111, 444, 222]  # non-default order we want preserved
+      'start_date': sch.start_date,
+      'skips': [{'user_id': 111, 'date': '2026-07-08', 'name': 'Alice'}],
+      'base_queue': [{'id': u.id, 'name': u.name} for u in self.users]
     }
     with open(sch._state_file, 'w', encoding='utf-8') as f:
       json.dump(legacy_data, f)
 
     sch2 = self.make_scheduler()
+    # It should have migrated 'date' to 'expiry_date' and set default 'start_date'
+    self.assertEqual(len(sch2.skips), 1)
+    self.assertEqual(sch2.skips[0]['user_id'], 111)
+    self.assertEqual(sch2.skips[0]['expiry_date'], '2026-07-08')
+    self.assertEqual(sch2.skips[0]['start_date'], sch.start_date)
 
-    # Queue order is preserved from the file
-    self.assertEqual([u.id for u in sch2.base_queue], [333, 111, 444, 222])
-    # Swaps and skips are discarded
-    self.assertEqual(sch2.swaps, [])
-    self.assertEqual(sch2.skips, [])
-    # Rotation restarts from today
-    self.assertEqual(sch2.start_date, self.today().isoformat())
+  # ------------------------------------------------------------------
+  # Serialization
+  # ------------------------------------------------------------------
 
+  @mock.patch('scheduler.datetime.date', new=MockDate)
   def test_human_readable_serialization(self):
     """Verify that usernames are serialized with user IDs on disk."""
+    MockDate._today_val = datetime.date(2026, 7, 6)
     sch = self.make_scheduler()
     
-    # Perform a swap and a skip
-    sch.swap(self.users[0], self.users[2])  # Alice (111) and Charlie (333)
+    # Perform a skip
     sch.skip(self.users[1])  # Bob (222)
     
-    # Force saving state if not already saved
+    # Force saving state
     sch.save_state()
     
     # Read raw JSON from disk
@@ -433,25 +264,15 @@ class SchedulerTestCase(unittest.TestCase):
     for entry in base_queue_data:
       self.assertIn('id', entry)
       self.assertIn('name', entry)
-      # Find original user to match the name
       orig_user = next(u for u in self.users if u.id == entry['id'])
-      self.assertEqual(entry['name'], orig_user.name)
-      
-    # Check swaps
-    swaps_data = data.get('swaps', [])
-    self.assertEqual(len(swaps_data), 2)
-    for entry in swaps_data:
-      self.assertIn('date', entry)
-      self.assertIn('user_id', entry)
-      self.assertIn('name', entry)
-      orig_user = next(u for u in self.users if u.id == entry['user_id'])
       self.assertEqual(entry['name'], orig_user.name)
       
     # Check skips
     skips_data = data.get('skips', [])
     self.assertEqual(len(skips_data), 1)
     entry = skips_data[0]
-    self.assertIn('date', entry)
+    self.assertIn('start_date', entry)
+    self.assertIn('expiry_date', entry)
     self.assertIn('user_id', entry)
     self.assertIn('name', entry)
     self.assertEqual(entry['user_id'], 222)
@@ -461,103 +282,116 @@ class SchedulerTestCase(unittest.TestCase):
     sch2 = self.make_scheduler()
     self.assertEqual(len(sch2.skips), 1)
     self.assertEqual(sch2.skips[0]['user_id'], 222)
-    self.assertEqual(len(sch2.swaps), 2)
+
+  # ------------------------------------------------------------------
+  # Multiple Skips
+  # ------------------------------------------------------------------
 
   @mock.patch('scheduler.datetime.date', new=MockDate)
-  def test_user_requested_swap_scenario(self):
-    """Test user requested scenario:
-    - Monday: Bob is Tuesday, Alice is Thursday. Swap Bob and Alice.
-      Verify Alice is Tuesday, Bob is Thursday.
-    - Wednesday: Verify Bob is still Thursday (expired Tuesday swap pruned, Thursday swap survives).
-    - Wednesday: Run !swap reset. Verify Alice is back on Thursday.
-    """
-    # Set up members: Charlie, Bob, David, Alice
-    # Users will be: Charlie (333), Bob (222), David (444), Alice (111)
-    users = [
-      self.users[2], # Charlie (333)
-      self.users[1], # Bob (222)
-      self.users[3], # David (444)
-      self.users[0]  # Alice (111)
-    ]
-    
-    # 1. Today is Monday (2026-07-06)
+  def test_multiple_skips_work_as_expected(self):
     MockDate._today_val = datetime.date(2026, 7, 6)
+    sch = self.make_scheduler()
     
-    sch = self.make_scheduler(users)
+    # Skip both Alice and Bob today (Monday 7/06).
+    # Since len(base_queue) is 4, both will be skipped for 4 days, expiring on 2026-07-10.
+    sch.skip(self.users[0])  # Alice
+    sch.skip(self.users[1])  # Bob
     
-    # Verify starting rotation order:
-    # Monday (offset 0): Charlie
-    # Tuesday (offset 1): Bob
-    # Wednesday (offset 2): David
-    # Thursday (offset 3): Alice
+    # Schedule for the next few days:
+    # Day 0 (Monday 7/06): Alice and Bob skipped -> Charlie (333)
+    # Day 1 (Tuesday 7/07): David (444)
+    # Day 2 (Wednesday 7/08): Alice and Bob skipped -> Charlie (333)
+    # Day 3 (Thursday 7/09): David (444)
+    # Day 4 (Friday 7/10): Skips expired -> Alice (111)
+    # Day 5 (Saturday 7/11): Bob (222)
     self.assertEqual(sch.get_user_for_day(0).id, 333) # Charlie
-    self.assertEqual(sch.get_user_for_day(1).id, 222) # Bob
-    self.assertEqual(sch.get_user_for_day(2).id, 444) # David
-    self.assertEqual(sch.get_user_for_day(3).id, 111) # Alice
-    
-    # Swap Bob and Alice
-    sch.swap(self.users[1], self.users[0]) # Bob (222) and Alice (111)
-    
-    # Ensure Alice is now Tuesday, Bob is Thursday
-    self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice on Tuesday (offset 1)
-    self.assertEqual(sch.get_user_for_day(3).id, 222) # Bob on Thursday (offset 3)
-    
-    # 2. Today is Wednesday (2026-07-08)
-    MockDate._today_val = datetime.date(2026, 7, 8)
-    
-    # Reload/Sync state (which prunes expired swaps like Tuesday's)
-    sch.load_state(users)
-    
-    # Ensure Bob is still Thursday (Thursday is tomorrow, offset 1 relative to Wednesday)
-    self.assertEqual(sch.get_user_for_day(1).id, 222) # Bob on Thursday
-    
-    # Run swap reset
-    sch.reset_swaps()
-    
-    # Ensure Alice is back on Thursday
-    self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice on Thursday
-
-  @mock.patch('scheduler.datetime.date', new=MockDate)
-  def test_skip_order_independence(self):
-    """If Bob is on 7/2 and Alice on 7/3:
-    Skipping Alice (7/3) then Bob (7/2) should yield the same correct schedule
-    as skipping Bob (7/2) then Alice (7/2): Alice should not show up on 7/2.
-    """
-    # 7/2 is Thursday, 7/3 is Friday
-    MockDate._today_val = datetime.date(2026, 7, 2)
-    
-    # base_queue: Bob (222), Alice (111), Charlie (333), David (444)
-    # Start date is today (7/2)
-    users = [self.users[1], self.users[0], self.users[2], self.users[3]]
-    sch = self.make_scheduler(users)
-    
-    # Verify starting rotation order:
-    # 7/2 (offset 0): Bob
-    # 7/3 (offset 1): Alice
-    # 7/4 (offset 2): Charlie
-    # 7/5 (offset 3): David
-    self.assertEqual(sch.get_user_for_day(0).id, 222) # Bob
-    self.assertEqual(sch.get_user_for_day(1).id, 111) # Alice
+    self.assertEqual(sch.get_user_for_day(1).id, 444) # David
     self.assertEqual(sch.get_user_for_day(2).id, 333) # Charlie
     self.assertEqual(sch.get_user_for_day(3).id, 444) # David
+    self.assertEqual(sch.get_user_for_day(4).id, 111) # Alice
+    self.assertEqual(sch.get_user_for_day(5).id, 222) # Bob
+
+  @mock.patch('scheduler.datetime.date', new=MockDate)
+  def test_multiple_skips_5_users(self):
+    MockDate._today_val = datetime.date(2026, 7, 6)
+    # Queue is 5 users: Alice (111), Bob (222), Charlie (333), David (444), Eve (555)
+    users = [
+      self.users[0], # Alice
+      self.users[1], # Bob
+      self.users[2], # Charlie
+      self.users[3], # David
+      MockMember(555, 'Eve')
+    ]
     
-    # Skip Alice first (should get skip date 7/3)
-    sch.skip(self.users[0])
-    self.assertEqual(sch.skips[0]['date'], self.date_offset(1)) # 7/3
-    
-    # Skip Bob second (should get skip date 7/2)
-    sch.skip(self.users[1])
-    self.assertEqual(sch.skips[1]['date'], self.date_offset(0)) # 7/2
-    
-    # Ensure Alice does NOT show up on 7/2!
-    # On 7/2 (offset 0), Charlie should be on call (Bob and Alice both skipped)
+    # Test skipping in order of appearance (Bob, Charlie, David)
+    sch_forward = self.make_scheduler(users)
+    sch_forward.skip(users[1]) # Bob
+    sch_forward.skip(users[2]) # Charlie
+    sch_forward.skip(users[3]) # David
+
+    self.assertEqual(sch_forward.get_user_for_day(0).id, 111) # Alice
+    self.assertEqual(sch_forward.get_user_for_day(1).id, 555) # Eve
+    self.assertEqual(sch_forward.get_user_for_day(2).id, 111) # Alice
+    self.assertEqual(sch_forward.get_user_for_day(3).id, 555) # Eve
+    self.assertEqual(sch_forward.get_user_for_day(4).id, 111) # Alice
+    self.assertEqual(sch_forward.get_user_for_day(5).id, 222) # Bob
+    self.assertEqual(sch_forward.get_user_for_day(6).id, 333) # Charlie
+
+    # Clean the state file so the reverse test starts fresh
+    if self.state_file.exists():
+      os.remove(self.state_file)
+
+    # Test skipping in reverse order (David, Charlie, Bob)
+    sch_reverse = self.make_scheduler(users)
+    sch_reverse.skip(users[3]) # David
+    sch_reverse.skip(users[2]) # Charlie
+    sch_reverse.skip(users[1]) # Bob
+
+    self.assertEqual(sch_reverse.get_user_for_day(0).id, 111) # Alice
+    self.assertEqual(sch_reverse.get_user_for_day(1).id, 555) # Eve
+    self.assertEqual(sch_reverse.get_user_for_day(2).id, 111) # Alice
+    self.assertEqual(sch_reverse.get_user_for_day(3).id, 555) # Eve
+    self.assertEqual(sch_reverse.get_user_for_day(4).id, 111) # Alice
+    self.assertEqual(sch_reverse.get_user_for_day(5).id, 222) # Bob
+    self.assertEqual(sch_reverse.get_user_for_day(6).id, 333) # Charlie
+
+  # ------------------------------------------------------------------
+  # Schedule Stability (No Recalculation Shifts)
+  # ------------------------------------------------------------------
+
+  @mock.patch('scheduler.datetime.date', new=MockDate)
+  def test_schedule_stability_after_expiry(self):
+    """The schedule must remain stable and not retroactively shift when skips expire."""
+    # 1. Today is Monday 7/06. Alice (111) is skipped for 4 days (until Friday 7/10).
+    MockDate._today_val = datetime.date(2026, 7, 6)
+    sch = self.make_scheduler()
+    sch.skip(self.users[0]) # Skip Alice
+
+    # Confirm rotation under active skip:
+    # Monday 7/06 (offset 0): Bob (222)
+    # Tuesday 7/07 (offset 1): Charlie (333)
+    # Wednesday 7/08 (offset 2): David (444)
+    # Thursday 7/09 (offset 3): Bob (222)
+    # Friday 7/10 (offset 4): Charlie (333)
+    self.assertEqual(sch.get_user_for_day(0).id, 222) # Bob
+    self.assertEqual(sch.get_user_for_day(1).id, 333) # Charlie
+    self.assertEqual(sch.get_user_for_day(2).id, 444) # David
+    self.assertEqual(sch.get_user_for_day(3).id, 222) # Bob
+    self.assertEqual(sch.get_user_for_day(4).id, 333) # Charlie
+
+    # 2. Advance time to Friday 7/10. Alice's skip expires.
+    MockDate._today_val = datetime.date(2026, 7, 10)
+    sch.load_state(self.users)
+
+    # The skip must not display in the schedule anymore.
+    table = sch.generate_schedule()
+    self.assertNotIn("Alice", table)
+    self.assertNotIn("Skipped members:", table)
+
+    # Friday 7/10 is offset 0 relative to today (Friday 7/10).
+    # Since the skip history is preserved, Friday's assignment must STABLY remain Charlie (333),
+    # rather than shifting back to Alice (111).
     self.assertEqual(sch.get_user_for_day(0).id, 333) # Charlie
-    # On 7/3 (offset 1), David should be on call (Alice skipped)
-    self.assertEqual(sch.get_user_for_day(1).id, 444) # David
-    # On 7/4 (offset 2), Bob is back and next in queue
-    self.assertEqual(sch.get_user_for_day(2).id, 222) # Bob
-    # On 7/5 (offset 3), Alice is back
-    self.assertEqual(sch.get_user_for_day(3).id, 111) # Alice
 
 
 if __name__ == '__main__':

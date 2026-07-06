@@ -28,7 +28,6 @@ will display this menu in-chat as well.
 ```
 schedule    List the schedule for the seven days
 signoff     Sign off the on-call member for today
-swap        Swap on call position with chosen person
 today       Return the person who is on-call today
 ```
 
