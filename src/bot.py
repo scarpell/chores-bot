@@ -74,12 +74,10 @@ def get_chore_members():
 
   bot_role = discord.utils.get(guild.roles, name='bot')
   
-  users = []
-  for member in guild.members:
-    if role in member.roles:
-      if not bot_role or bot_role not in member.roles:
-        users.append(member)
-  return users
+  return [
+    m for m in guild.members
+    if role in m.roles and (not bot_role or bot_role not in m.roles)
+  ]
 
 
 def sync_users():
@@ -148,48 +146,6 @@ async def on_call_today(ctx):
 async def schedule(ctx):
   await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
   return
-
-
-@bot.command(name='skip', help='Skip the next appearance of a user or reset skips')
-async def skip(ctx, arg: str = None):
-  if arg is None:
-    await ctx.message.channel.send(
-      '**Usage:**\n'
-      '- `!skip @username` (skips the next appearance of the specified user)\n'
-      '- `!skip reset` (resets all active skipped entries)'
-    )
-    return
-
-  if arg.lower() == 'reset':
-    sch.reset_skips()
-    await ctx.message.channel.send('All skipped entries have been reset! The new schedule '
-                                  'is as follows:')
-    await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
-    return
-
-  try:
-    member = await commands.MemberConverter().convert(ctx, arg)
-  except commands.MemberNotFound:
-    await ctx.message.channel.send('Could not find member: {}'.format(arg))
-    return
-
-  try:
-    was_skipped = sch.skip(member)
-    if was_skipped:
-      await ctx.message.channel.send('{} has been skipped for their next appearance! The new schedule '
-                                    'is as follows:'.format(util.discord_name(member)))
-    else:
-      await ctx.message.channel.send('{} is no longer skipped! The new schedule '
-                                    'is as follows:'.format(util.discord_name(member)))
-    await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
-  except ValueError as e:
-    await ctx.message.channel.send(str(e))
-  except Exception as e:
-    logger.error('Error in skip command: {}'.format(e))
-    await ctx.message.channel.send('There was an error when trying to skip.')
-
-  return
-
 
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
