@@ -127,7 +127,6 @@ async def on_ready():
   # Guard against reconnects: on_ready can fire more than once.
   if not notify.is_running():
     notify.start()
-  return
 
 
 @bot.before_invoke
@@ -137,8 +136,12 @@ async def before_any_command(ctx):
 
 @bot.command(name='today', help='Return the person who is on-call today')
 async def on_call_today(ctx):
+  user = sch.on_call
+  if user is None:
+    await ctx.message.channel.send('No one is assigned for dishes today.')
+    return
   await ctx.message.channel.send(
-    '<@{}> is responsible for the dishes today!'.format(sch.on_call.id))
+    '<@{}> is responsible for the dishes today!'.format(user.id))
   return
 
   
@@ -150,18 +153,20 @@ async def schedule(ctx):
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
 async def notify():
-  sync_users()
   now_utc = datetime.datetime.now(datetime.timezone.utc)
   curr_time = now_utc.astimezone(zoneinfo.ZoneInfo('America/Denver'))
 
   if curr_time.hour == 9:
-    await _default_channel.send(
-      '<@{}> is responsible for the dishes today'.format(
-        sch.on_call.id))
-    logger.info('{} has been notified.'.format(util.discord_name(sch.on_call)))
+    sync_users()
+    user = sch.on_call
+    if user is None:
+      logger.info('No one on call today; notification suppressed.')
+    else:
+      await _default_channel.send(
+        '<@{}> is responsible for the dishes today'.format(user.id))
+      logger.info('{} has been notified.'.format(util.discord_name(user)))
   else:
     logger.info('Notification suppressed.')
-  return
 
 
 @notify.before_loop

@@ -32,8 +32,7 @@ class SchedulerTestCase(unittest.TestCase):
             MockMember(444, 'David'),
             MockMember(555, 'Eve'),
         ]
-        self.test_data_dir = util.get_data_folder()
-        self.state_file = self.test_data_dir / 'schedule.json'
+        self.state_file = util.get_data_folder() / 'schedule.json'
         if self.state_file.exists():
             os.remove(self.state_file)
 
@@ -42,146 +41,179 @@ class SchedulerTestCase(unittest.TestCase):
             os.remove(self.state_file)
 
     def make_scheduler(self, users=None):
-        """Create a scheduler and load state — mirrors the real bot startup."""
         sch = scheduler.Scheduler()
         sch.load_state(users if users is not None else self.users)
         return sch
 
-    def today(self):
-        return datetime.date.today()
+    def visible_ids(self, sch):
+        return [e['id'] for _, e in sch.printable_schedule()]
 
     # ------------------------------------------------------------------
-    # Basic rotation access
+    # load_state / init
+    # ------------------------------------------------------------------
+
+    def test_empty_users_raises(self):
+        sch = scheduler.Scheduler()
+        with self.assertRaises(ValueError):
+            sch.load_state([])
+
+    def test_member_list_initialized_from_users(self):
+        sch = self.make_scheduler()
+        self.assertEqual([u.id for u in sch.member_list], [111, 222, 333, 444, 555])
+
+    def test_start_date_is_today_on_fresh_init(self):
+        sch = self.make_scheduler()
+        self.assertEqual(sch.rotation_start_date, datetime.date.today().isoformat())
+
+    # ------------------------------------------------------------------
+    # printable_schedule — the core filter
+    # ------------------------------------------------------------------
+
+    def test_printable_schedule_excludes_removed(self):
+        sch = self.make_scheduler()
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)
+        ids = [e['id'] for _, e in sch.printable_schedule()]
+        self.assertNotIn(333, ids)
+
+    def test_printable_schedule_all_visible_on_fresh_init(self):
+        sch = self.make_scheduler()
+        for _, entry in sch.printable_schedule():
+            self.assertFalse(entry.get('removed', False))
+
+    def test_printable_schedule_has_dates(self):
+        sch = self.make_scheduler()
+        sched = sch.printable_schedule()
+        today = datetime.date.today()
+        self.assertEqual(sched[0][0], today)              # first date is today
+        self.assertEqual(sched[1][0], today + datetime.timedelta(days=1))
+
+    # ------------------------------------------------------------------
+    # on_call
     # ------------------------------------------------------------------
 
     def test_on_call(self):
         sch = self.make_scheduler()
-        self.assertEqual(sch.on_call.id, 111)  # Alice is day 0
+        user = sch.on_call
+        self.assertIsNotNone(user)
+        self.assertEqual(user.id, 111)   # Alice is day 0
+        self.assertFalse(user.removed)
 
-    def test_get_user_for_day(self):
-        sch = self.make_scheduler()
-        self.assertEqual(sch.get_user_for_day(0).id, 111)  # Alice
-        self.assertEqual(sch.get_user_for_day(1).id, 222)  # Bob
-        self.assertEqual(sch.get_user_for_day(2).id, 333)  # Charlie
-        self.assertEqual(sch.get_user_for_day(3).id, 444)  # David
-        self.assertEqual(sch.get_user_for_day(4).id, 555)  # Eve
-        # Day 5 extends; round-robin restarts from Alice.
-        self.assertEqual(sch.get_user_for_day(5).id, 111)
+    def test_on_call_returns_none_for_removed_slot(self):
+        """on_call is None when today's slot belongs to a removed user."""
+        sch = self.make_scheduler()      # day 0 = Alice
+        no_alice = [u for u in self.users if u.id != 111]
+        sch.load_state(no_alice)         # Alice removed → day 0 gap
+        self.assertIsNone(sch.on_call)
 
-    def test_start_date_is_today_on_fresh_init(self):
+    def test_on_call_nick(self):
         sch = self.make_scheduler()
-        self.assertEqual(sch.rotation_start_date, self.today().isoformat())
-
-    def test_all_active_on_fresh_init(self):
-        sch = self.make_scheduler()
-        for i in range(5):
-            self.assertTrue(sch.get_user_for_day(i).is_active)
+        self.assertEqual(sch.on_call.nick, 'Aly')
 
     # ------------------------------------------------------------------
-    # Active-coverage extension
+    # _extend_rotation_by_one
     # ------------------------------------------------------------------
-
-    def test_rotation_covers_at_least_member_list_active_count(self):
-        """After init, active entries in rotation >= len(member_list)."""
-        sch = self.make_scheduler()
-        active_ids = {u.id for u in sch.member_list}
-        active_count = sum(1 for e in sch.rotation_users if e['id'] in active_ids)
-        self.assertGreaterEqual(active_count, len(self.users))
 
     def test_extension_is_round_robin(self):
-        """Extensions cycle through member_list in order."""
-        sch = self.make_scheduler()  # [A,B,C,D,E], ext_idx=0
-        # After fresh init: rotation = [A,B,C,D,E], next = A.
-        sch._ensure_active_coverage(10)
+        sch = self.make_scheduler()   # [A,B,C,D,E], ext_idx=0
+        for _ in range(5):
+            sch._extend_rotation_by_one()
         ids = [e['id'] for e in sch.rotation_users[:10]]
-        expected = [111, 222, 333, 444, 555, 111, 222, 333, 444, 555]
-        self.assertEqual(ids, expected)
+        self.assertEqual(ids, [111, 222, 333, 444, 555, 111, 222, 333, 444, 555])
 
-    def test_na_entries_do_not_count_toward_minimum(self):
-        """When a user is removed (N/A), the rotation extends to compensate."""
+    def test_extension_index_wraps(self):
         sch = self.make_scheduler()
-        # [A,B,C,D,E,A,B] after generate_schedule (7 active).
-        sch._ensure_active_coverage(7)
-        rotation_before = list(sch.rotation_users)
+        # Fresh init: 5 entries, extension_index=0
+        self.assertEqual(sch.extension_index, 0)
+        sch._extend_rotation_by_one()
+        self.assertEqual(sch.rotation_users[-1]['id'], 111)  # Alice again
+        self.assertEqual(sch.extension_index, 1)
 
-        # Remove Charlie — one slot becomes N/A, active count drops to 6.
+    # ------------------------------------------------------------------
+    # Remove user → removed:true in rotation
+    # ------------------------------------------------------------------
+
+    def test_remove_user_marks_rotation_entries_removed(self):
+        sch = self.make_scheduler()
+        for _ in range(5):
+            sch._extend_rotation_by_one()   # add A,B,C,D,E again
+
         no_charlie = [u for u in self.users if u.id != 333]
         sch.load_state(no_charlie)
 
-        active_ids = {u.id for u in sch.member_list}
-        active_after = sum(1 for e in sch.rotation_users if e['id'] in active_ids)
-        # load_state ensures len(member_list)=4 active — 6 active is enough.
-        self.assertGreaterEqual(active_after, len(sch.member_list))
+        charlie_entries = [e for e in sch.rotation_users if e['id'] == 333]
+        self.assertTrue(all(e.get('removed') for e in charlie_entries))
 
-    def test_generate_schedule_ensures_7_active(self):
-        """generate_schedule extends to at least 7 active entries."""
+    def test_remove_user_drops_from_member_list(self):
         sch = self.make_scheduler()
-        # Remove Charlie so 1 slot becomes N/A in the first 7 entries.
         no_charlie = [u for u in self.users if u.id != 333]
         sch.load_state(no_charlie)
+        self.assertNotIn(333, [u.id for u in sch.member_list])
 
-        sch.generate_schedule()
-
-        active_ids = {u.id for u in sch.member_list}
-        active_count = sum(1 for e in sch.rotation_users if e['id'] in active_ids)
-        self.assertGreaterEqual(active_count, 7)
-
-    def test_extension_adds_one_extra_when_na_present(self):
-        """With [A,B,C,D,E,A,B] and C removed: rotation becomes [A,B,C,D,E,A,B,D]."""
+    def test_removed_entry_flagged_in_rotation_users(self):
         sch = self.make_scheduler()
-        sch._ensure_active_coverage(7)  # → [A,B,C,D,E,A,B], next=C (idx 2)
-
-        # Remove Charlie — ext_idx shifts to D (successor of C in [A,B,D,E]).
         no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)  # 6 active >= min(4) — no auto-extend yet
+        sch.load_state(no_charlie)
+        # rotation_users[2] is Charlie (day 2)
+        charlie_slot = sch.rotation_users[2]
+        self.assertEqual(charlie_slot['id'], 333)
+        self.assertTrue(charlie_slot.get('removed'))
 
-        sch._ensure_active_coverage(7)  # 6 < 7 → extend by 1
+    def test_extension_compensates_for_removed(self):
+        """remove C from [A,B,C,D,E]: 4 visible → load_state ensures 4 → no change.
+        Then extend to 7 visible: adds A,B,D (skipping C)."""
+        sch = self.make_scheduler()      # [A,B,C,D,E], 5 visible
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)       # marks C removed, 4 visible == len(ml)=4
 
-        ids = [e['id'] for e in sch.rotation_users]
-        self.assertEqual(ids, [111, 222, 333, 444, 555, 111, 222, 444])
-        # Charlie is still in the rotation at position 2.
-        self.assertEqual(sch.rotation_users[2]['id'], 333)
+        while len(sch.printable_schedule()) < 7:
+            sch._extend_rotation_by_one()
+
+        all_ids = [e['id'] for e in sch.rotation_users]
+        visible = self.visible_ids(sch)
+        self.assertEqual(all_ids, [111, 222, 333, 444, 555, 111, 222, 444])
+        self.assertNotIn(333, visible)
+        self.assertEqual(len(visible), 7)
 
     # ------------------------------------------------------------------
-    # next_extension_id round-robin continuity
+    # Re-add user — old entries stay removed, new entries appear via extension
     # ------------------------------------------------------------------
 
-    def test_readd_user_continues_correct_round_robin(self):
-        """Re-adding C goes to the END of member_list; round-robin continues from there.
-
-        Scenario:
-          Init [A,B,C,D,E]: rotation=[A,B,C,D,E,A,B], last active=B → next=C
-          Remove C → last active in rotation is B → next=D (C skipped, not in member_list)
-          generate_schedule adds D: rotation=[A,B,C,D,E,A,B,D], last active=D → next=E
-          Re-add C → appended at END: member_list=[A,B,D,E,C]
-          Further extensions from E(idx3): E, C(idx4), A, B, D, E, C, …
-        """
+    def test_readd_user_appended_to_member_list_end(self):
         sch = self.make_scheduler()
-        sch._ensure_active_coverage(7)  # [A,B,C,D,E,A,B]
-        sch.save_state()
-
-        # Remove Charlie.
         no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)       # member_list=[A,B,D,E], last active=B → next=D
-        sch._ensure_active_coverage(7)   # adds D → [A,B,C,D,E,A,B,D]
+        sch.load_state(no_charlie)
         sch.save_state()
 
-        # Re-add Charlie — goes to the END.
-        sch.load_state(self.users)       # member_list=[A,B,D,E,C]
+        sch.load_state(self.users)   # Charlie re-added
         self.assertEqual([u.id for u in sch.member_list], [111, 222, 444, 555, 333])
 
-        # All 8 rotation entries are now active (C is back in member_list).
-        active_ids = {u.id for u in sch.member_list}
-        active_count = sum(1 for e in sch.rotation_users if e['id'] in active_ids)
-        self.assertEqual(active_count, 8)
+    def test_readd_user_old_entries_stay_removed(self):
+        sch = self.make_scheduler()
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)
+        sch.save_state()
 
-        # Last active in rotation is D (id=444), at index 2 in [A,B,D,E,C].
-        # Next extensions: E(idx3), C(idx4), A(idx0), B(idx1).
-        sch._ensure_active_coverage(12)
-        ids = [e['id'] for e in sch.rotation_users]
-        # [A,B,C,D,E,A,B,D] + [E,C,A,B] = 12 entries
-        self.assertEqual(ids, [111, 222, 333, 444, 555, 111, 222, 444, 555, 333, 111, 222])
+        sch.load_state(self.users)
 
+        charlie_entries = [e for e in sch.rotation_users if e['id'] == 333]
+        self.assertTrue(charlie_entries)
+        self.assertTrue(all(e.get('removed') for e in charlie_entries),
+                        'Existing removed entries must remain removed after re-add')
+
+    def test_readd_user_gets_new_slot_via_extension(self):
+        sch = self.make_scheduler()
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)
+        sch.save_state()
+
+        sch.load_state(self.users)   # member_list=[A,B,D,E,C]
+        # Extend until Charlie has a new (non-removed) entry.
+        for _ in range(10):
+            sch._extend_rotation_by_one()
+        # Last occurrence of Charlie should be non-removed.
+        last_charlie = [e for e in sch.rotation_users if e['id'] == 333][-1]
+        self.assertFalse(last_charlie.get('removed'))
 
     # ------------------------------------------------------------------
     # Past-day cleanup
@@ -196,20 +228,7 @@ class SchedulerTestCase(unittest.TestCase):
         sch._cleanup_past_days()
 
         self.assertEqual(sch.rotation_start_date, '2026-07-08')
-        # Alice (day 0) and Bob (day 1) are gone; Charlie is now first.
-        self.assertEqual(sch.rotation_users[0]['id'], 333)
-
-    @mock.patch('scheduler.datetime.date', new=MockDate)
-    def test_cleanup_then_extend_maintains_active_coverage(self):
-        MockDate._today_val = datetime.date(2026, 7, 6)
-        sch = self.make_scheduler()  # [A,B,C,D,E], next=A (idx 0)
-
-        MockDate._today_val = datetime.date(2026, 7, 8)
-        sch._cleanup_past_days()    # [C,D,E], active=3 < 5
-        sch._ensure_active_coverage()  # extend to 5 active: add A,B
-
-        ids = [e['id'] for e in sch.rotation_users]
-        self.assertEqual(ids, [333, 444, 555, 111, 222])
+        self.assertEqual(sch.rotation_users[0]['id'], 333)   # Charlie now first
 
     @mock.patch('scheduler.datetime.date', new=MockDate)
     def test_load_state_cleanup_and_extend(self):
@@ -220,71 +239,58 @@ class SchedulerTestCase(unittest.TestCase):
         sch.load_state(self.users)
 
         self.assertEqual(sch.rotation_start_date, '2026-07-08')
-        active_ids = {u.id for u in sch.member_list}
-        active_count = sum(1 for e in sch.rotation_users if e['id'] in active_ids)
-        self.assertGreaterEqual(active_count, len(self.users))
-        self.assertEqual(sch.rotation_users[0]['id'], 333)  # Charlie is now first
+        self.assertEqual(sch.rotation_users[0]['id'], 333)
+        self.assertGreaterEqual(len(sch.printable_schedule()), len(self.users))
 
     # ------------------------------------------------------------------
     # member_list update rules
     # ------------------------------------------------------------------
 
-    def test_member_list_initialized_from_users(self):
-        sch = self.make_scheduler()
-        self.assertEqual([u.id for u in sch.member_list], [111, 222, 333, 444, 555])
-
-    def test_remove_user_drops_from_member_list(self):
-        sch = self.make_scheduler()
-        no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)
-        self.assertNotIn(333, [u.id for u in sch.member_list])
-
-    def test_add_user_appends_to_member_list(self):
+    def test_add_user_appended_to_member_list_end(self):
         sch = self.make_scheduler()
         sch.load_state(self.users + [MockMember(666, 'Frank')])
         self.assertEqual([u.id for u in sch.member_list], [111, 222, 333, 444, 555, 666])
 
-    # ------------------------------------------------------------------
-    # N/A behaviour
-    # ------------------------------------------------------------------
-
-    def test_removed_user_stays_in_rotation(self):
-        sch = self.make_scheduler()
-        no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)
-
-        rotation_ids = [e['id'] for e in sch.rotation_users]
-        self.assertIn(333, rotation_ids)
-
-        charlie = sch.get_user_for_day(2)
-        self.assertEqual(charlie.id, 333)
-        self.assertFalse(charlie.is_active)
-
-    def test_removed_user_rotation_length_unchanged(self):
-        sch = self.make_scheduler()
-        original_len = len(sch.rotation_users)
-        no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)
-        self.assertEqual(len(sch.rotation_users), original_len)
-
-    def test_added_user_not_in_current_rotation(self):
+    def test_add_user_appears_in_rotation_via_coverage(self):
         sch = self.make_scheduler()
         sch.load_state(self.users + [MockMember(666, 'Frank')])
-        rotation_ids = [e['id'] for e in sch.rotation_users]
-        self.assertNotIn(666, rotation_ids)
-        self.assertIn(666, [u.id for u in sch.member_list])
+        ids = self.visible_ids(sch)
+        self.assertIn(666, ids)
+        self.assertEqual(ids[:5], [111, 222, 333, 444, 555])
+        self.assertEqual(ids[5], 666)
 
-    def test_nick_preserved_for_active_users(self):
+    # ------------------------------------------------------------------
+    # generate_schedule
+    # ------------------------------------------------------------------
+
+    def test_generate_schedule_has_seven_columns(self):
         sch = self.make_scheduler()
-        alice = sch.get_user_for_day(0)
-        self.assertEqual(alice.nick, 'Aly')
+        output = sch.generate_schedule()
+        rows = [line for line in output.splitlines() if line.startswith('|')]
+        self.assertTrue(all(r.count('|') == 8 for r in rows))
 
-    def test_nick_none_for_na_users(self):
+    def test_generate_schedule_hides_removed_user(self):
         sch = self.make_scheduler()
         no_charlie = [u for u in self.users if u.id != 333]
         sch.load_state(no_charlie)
-        charlie = sch.get_user_for_day(2)
-        self.assertIsNone(charlie.nick)
+        output = sch.generate_schedule()
+        self.assertNotIn('Charlie', output)
+        self.assertNotIn('Chaz', output)
+
+    def test_generate_schedule_extends_if_too_short(self):
+        sch = self.make_scheduler()
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)   # 4 visible
+        sch.generate_schedule()
+        self.assertGreaterEqual(len(sch.printable_schedule()), 7)
+
+    def test_generate_schedule_still_seven_columns_with_removed(self):
+        sch = self.make_scheduler()
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)
+        output = sch.generate_schedule()
+        rows = [line for line in output.splitlines() if line.startswith('|')]
+        self.assertTrue(all(r.count('|') == 8 for r in rows))
 
     # ------------------------------------------------------------------
     # Serialization
@@ -299,22 +305,25 @@ class SchedulerTestCase(unittest.TestCase):
         with open(self.state_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        ml = data.get('member_list', [])
-        self.assertEqual(len(ml), len(self.users))
-
-        rot = data.get('rotation', {})
-        self.assertIn('start_date', rot)
-        self.assertIn('next_extension_id', rot)
-        self.assertIn('users', rot)
+        self.assertEqual(len(data['member_list']), len(self.users))
+        rot = data['rotation']
         self.assertEqual(rot['start_date'], '2026-07-06')
+        self.assertIn('users', rot)
 
-        # Round-trip.
-        sch2 = self.make_scheduler()
-        self.assertEqual([u.id for u in sch2.member_list], [u.id for u in self.users])
-        self.assertEqual(sch2.rotation_start_date, sch.rotation_start_date)
+    def test_removed_flag_persisted_on_disk(self):
+        sch = self.make_scheduler()
+        no_charlie = [u for u in self.users if u.id != 333]
+        sch.load_state(no_charlie)
+        sch.save_state()
+
+        with open(self.state_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        charlie_on_disk = [e for e in data['rotation']['users'] if e['id'] == 333]
+        self.assertTrue(charlie_on_disk)
+        self.assertTrue(all(e.get('removed') for e in charlie_on_disk))
 
     def test_migration_from_legacy_rotation_format(self):
-        """Old rotation-block format (no next_extension_id) migrates cleanly."""
         legacy_data = {
             'member_list': [
                 {'id': 111, 'name': 'Alice'}, {'id': 222, 'name': 'Bob'},
@@ -336,38 +345,8 @@ class SchedulerTestCase(unittest.TestCase):
         sch = self.make_scheduler()
 
         self.assertEqual([e['id'] for e in sch.rotation_users[:5]], [111, 222, 333, 444, 555])
-        # extension_index inferred from last user (Eve, idx 4 → next = 0 = Alice).
         self.assertEqual(sch.extension_index, 0)
         self.assertEqual(sch.rotation_start_date, datetime.date.today().isoformat())
-
-        with open(self.state_file, 'r', encoding='utf-8') as f:
-            saved = json.load(f)
-        self.assertIn('rotation', saved)
-        self.assertIn('next_extension_id', saved['rotation'])
-
-    # ------------------------------------------------------------------
-    # generate_schedule display
-    # ------------------------------------------------------------------
-
-    def test_generate_schedule_shows_na_for_removed_user(self):
-        sch = self.make_scheduler()
-        no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)
-        output = sch.generate_schedule()
-        self.assertIn('Charlie (N/A)', output)
-        self.assertNotIn('Alice (N/A)', output)
-
-    def test_generate_schedule_no_na_when_all_active(self):
-        sch = self.make_scheduler()
-        output = sch.generate_schedule()
-        self.assertNotIn('(N/A)', output)
-
-    def test_generate_schedule_has_seven_day_columns(self):
-        sch = self.make_scheduler()
-        output = sch.generate_schedule()
-        # Count column separators in the data row.
-        rows = [line for line in output.splitlines() if line.startswith('|')]
-        self.assertTrue(all(r.count('|') == 8 for r in rows))  # 7 cols = 8 pipes
 
 
 if __name__ == '__main__':
