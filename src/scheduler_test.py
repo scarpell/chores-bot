@@ -406,6 +406,30 @@ class SchedulerTestCase(unittest.TestCase):
         self.assertNotIn('Alice', first_col)
         self.assertNotIn('Aly', first_col)
 
+    def test_generate_schedule_skipped_footer(self):
+        """A 'Skipped: ...' footer appears when a user is skipped."""
+        sch = self.make_scheduler()
+        sch.skip_user(111)   # Alice skipped
+        output = sch.generate_schedule()
+        self.assertIn('Skipped:', output)
+        self.assertIn('Alice', output.split('Skipped:')[1])
+
+    def test_generate_schedule_multiple_skipped_footer(self):
+        """Multiple skipped users all appear in the footer."""
+        sch = self.make_scheduler()
+        sch.skip_user(111)   # Alice
+        sch.skip_user(333)   # Charlie
+        output = sch.generate_schedule()
+        footer = output.split('Skipped:')[1]
+        self.assertIn('Alice', footer)
+        self.assertIn('Charlie', footer)
+
+    def test_generate_schedule_no_footer_when_none_skipped(self):
+        """No footer when no one is skipped."""
+        sch = self.make_scheduler()
+        output = sch.generate_schedule()
+        self.assertNotIn('Skipped:', output)
+
 
 if __name__ == '__main__':
     unittest.main()

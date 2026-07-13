@@ -258,6 +258,8 @@ class Scheduler:
 
         Extends the rotation one entry at a time until the printable
         schedule has at least 7 entries, then renders the first 7.
+        Appends a 'Skipped: ...' footer for any users who are skipped
+        within the displayed date window.
         """
         while len(self.printable_schedule()) < 7:
             self._extend_rotation_by_one()
@@ -283,4 +285,16 @@ class Scheduler:
         table_str += '|' + '|'.join(c[1] for c in cols) + '|\n'
         table_str += '+' + '+'.join(c[3] for c in cols) + '+\n'
         table_str += '|' + '|'.join(c[2] for c in cols) + '|\n'
+
+        # List any skipped users whose slot falls within the displayed window.
+        start = datetime.date.fromisoformat(self.rotation_start_date)
+        last_idx = (sched[-1][0] - start).days
+        skipped_names = [
+            e['name']
+            for e in self.rotation_users[:last_idx + 1]
+            if e.get('skip')
+        ]
+        if skipped_names:
+            table_str += '\nSkipped: {}'.format(', '.join(skipped_names))
+
         return table_str
