@@ -70,48 +70,35 @@ class Scheduler:
 
             # Reconcile member_list: preserve saved order, drop removed, append new.
             saved_ml_ids = [int(e['id']) for e in data.get('member_list', [])]
+            saved_ml_id_set = set(saved_ml_ids)
             self.member_list = [user_map[uid] for uid in saved_ml_ids if uid in user_map]
-            self.member_list += [u for u in users if u.id not in set(saved_ml_ids)]
+            self.member_list += [u for u in users if u.id not in saved_ml_id_set]
 
-            # Load rotation (with legacy fallback).
+            # Load rotation.
             rot = data.get('rotation') or {}
             self.rotation_start_date = rot.get(
                 'start_date', datetime.date.today().isoformat())
-            raw_users = rot.get('users', [])
-
-            if raw_users:
+            self.rotation_users = [
+                {
+                    'id': int(e['id']),
+                    'name': e.get('name', str(e['id'])),
+                    **({'removed': True} if e.get('removed') else {}),
+                }
+                for e in rot.get('users', [])
+            ]
+            if not self.rotation_users:
                 self.rotation_users = [
-                    {
-                        'id': int(e['id']),
-                        'name': e.get('name', str(e['id'])),
-                        **({'removed': True} if e.get('removed') else {}),
-                    }
-                    for e in raw_users
+                    {'id': u.id, 'name': u.name} for u in self.member_list
                 ]
-            else:
-                legacy = data.get('base_queue', data.get('queue', []))
-                if legacy:
-                    self._logger.info('Migrating legacy base_queue format.')
-                    self.rotation_users = [
-                        {
-                            'id': int(e['id'] if isinstance(e, dict) else e),
-                            'name': (
-                                e.get('name', str(e['id']))
-                                if isinstance(e, dict) else str(e)
-                            ),
-                        }
-                        for e in legacy
-                    ]
-                else:
-                    self.rotation_users = [
-                        {'id': u.id, 'name': u.name} for u in self.member_list
-                    ]
                 self.rotation_start_date = datetime.date.today().isoformat()
 
             # Trim past days, then flag entries for members who lost the role.
             self._cleanup_past_days()
-            removed_ids = set(saved_ml_ids) - set(user_map.keys())
+            removed_ids = saved_ml_id_set - set(user_map.keys())
             self._mark_removed(removed_ids)
+            # Restore entries for users who regained the role.
+            regained_ids = {u.id for u in users if u.id not in saved_ml_id_set}
+            self._restore_removed(regained_ids)
 
             # Compute round-robin position and ensure a starting buffer.
             self.extension_index = self._compute_extension_index()
@@ -134,6 +121,14 @@ class Scheduler:
         for entry in self.rotation_users:
             if entry['id'] in user_ids:
                 entry['removed'] = True
+
+    def _restore_removed(self, user_ids: set):
+        """Clear the removed flag on rotation entries for re-added users."""
+        if not user_ids:
+            return
+        for entry in self.rotation_users:
+            if entry['id'] in user_ids and entry.get('removed'):
+                del entry['removed']
 
     def _compute_extension_index(self) -> int:
         """Find where to resume the round-robin from the last visible entry."""
@@ -220,9 +215,11 @@ class Scheduler:
         If that entry's date is not today (today is a removed gap),
         returns None — no one is on call.
         """
-        while not self.printable_schedule():
+        sched = self.printable_schedule()
+        while not sched:
             self._extend_rotation_by_one()
-        date, entry = self.printable_schedule()[0]
+            sched = self.printable_schedule()
+        date, entry = sched[0]
         if date != datetime.date.today():
             return None  # Today is a removed/gap day.
         member_map = {u.id: u for u in self.member_list}
@@ -240,9 +237,10 @@ class Scheduler:
 
         today = datetime.date.today()
         member_map = {u.id: u for u in self.member_list}
+        sched = self.printable_schedule()[:7]
 
         cols = []
-        for entry_date, entry in self.printable_schedule()[:7]:
+        for entry_date, entry in sched:
             d_str = entry_date.strftime('%B ') + str(entry_date.day)
             day_str = (
                 calendar.day_abbr[entry_date.weekday()]

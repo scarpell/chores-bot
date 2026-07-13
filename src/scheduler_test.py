@@ -188,32 +188,37 @@ class SchedulerTestCase(unittest.TestCase):
         sch.load_state(self.users)   # Charlie re-added
         self.assertEqual([u.id for u in sch.member_list], [111, 222, 444, 555, 333])
 
-    def test_readd_user_old_entries_stay_removed(self):
+    def test_readd_user_removed_flag_is_cleared(self):
+        """Re-adding a user clears removed=True from their rotation entries."""
         sch = self.make_scheduler()
         no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)
+        sch.load_state(no_charlie)    # Charlie marked removed
         sch.save_state()
 
-        sch.load_state(self.users)
+        sch.load_state(self.users)    # Charlie re-added
 
         charlie_entries = [e for e in sch.rotation_users if e['id'] == 333]
         self.assertTrue(charlie_entries)
-        self.assertTrue(all(e.get('removed') for e in charlie_entries),
-                        'Existing removed entries must remain removed after re-add')
+        self.assertFalse(any(e.get('removed') for e in charlie_entries),
+                         'removed flag must be cleared when user regains the role')
 
-    def test_readd_user_gets_new_slot_via_extension(self):
-        sch = self.make_scheduler()
+    def test_readd_user_no_duplicate_slot(self):
+        """Re-adding restores existing entries; coverage loop should not add extras."""
+        sch = self.make_scheduler()          # [A,B,C,D,E]
         no_charlie = [u for u in self.users if u.id != 333]
-        sch.load_state(no_charlie)
+        sch.load_state(no_charlie)            # marks C removed
+        while len(sch.printable_schedule()) < 7:
+            sch._extend_rotation_by_one()    # extends to 7 visible
         sch.save_state()
 
-        sch.load_state(self.users)   # member_list=[A,B,D,E,C]
-        # Extend until Charlie has a new (non-removed) entry.
-        for _ in range(10):
-            sch._extend_rotation_by_one()
-        # Last occurrence of Charlie should be non-removed.
-        last_charlie = [e for e in sch.rotation_users if e['id'] == 333][-1]
-        self.assertFalse(last_charlie.get('removed'))
+        count_before = sum(1 for e in sch.rotation_users if e['id'] == 333)
+        sch.load_state(self.users)           # re-add Charlie (restore)
+        count_after = sum(1 for e in sch.rotation_users if e['id'] == 333)
+
+        # Restore should not add new entries — same count, flag cleared.
+        self.assertEqual(count_before, count_after)
+        charlie_entries = [e for e in sch.rotation_users if e['id'] == 333]
+        self.assertFalse(any(e.get('removed') for e in charlie_entries))
 
     # ------------------------------------------------------------------
     # Past-day cleanup
@@ -322,31 +327,6 @@ class SchedulerTestCase(unittest.TestCase):
         charlie_on_disk = [e for e in data['rotation']['users'] if e['id'] == 333]
         self.assertTrue(charlie_on_disk)
         self.assertTrue(all(e.get('removed') for e in charlie_on_disk))
-
-    def test_migration_from_legacy_rotation_format(self):
-        legacy_data = {
-            'member_list': [
-                {'id': 111, 'name': 'Alice'}, {'id': 222, 'name': 'Bob'},
-                {'id': 333, 'name': 'Charlie'}, {'id': 444, 'name': 'David'},
-                {'id': 555, 'name': 'Eve'},
-            ],
-            'rotation': {
-                'start_date': '2026-01-01',
-                'users': [
-                    {'id': 111, 'name': 'Alice'}, {'id': 222, 'name': 'Bob'},
-                    {'id': 333, 'name': 'Charlie'}, {'id': 444, 'name': 'David'},
-                    {'id': 555, 'name': 'Eve'},
-                ]
-            }
-        }
-        with open(self.state_file, 'w', encoding='utf-8') as f:
-            json.dump(legacy_data, f)
-
-        sch = self.make_scheduler()
-
-        self.assertEqual([e['id'] for e in sch.rotation_users[:5]], [111, 222, 333, 444, 555])
-        self.assertEqual(sch.extension_index, 0)
-        self.assertEqual(sch.rotation_start_date, datetime.date.today().isoformat())
 
 
 if __name__ == '__main__':

@@ -142,13 +142,11 @@ async def on_call_today(ctx):
     return
   await ctx.message.channel.send(
     '<@{}> is responsible for the dishes today!'.format(user.id))
-  return
 
   
 @bot.command(name='schedule', help='List the schedule for the seven days')
 async def schedule(ctx):
   await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
-  return
 
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
@@ -180,7 +178,6 @@ async def notifications_init():
   logger.info('Sleeping {} seconds before activating notifications'.format(
     delta.total_seconds()))
   await asyncio.sleep(delta.total_seconds())
-  return
 
 
 @bot.event
