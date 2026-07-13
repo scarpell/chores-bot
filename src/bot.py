@@ -161,6 +161,8 @@ async def cmd_skip(ctx, member: discord.Member):
   else:
     await ctx.message.channel.send(
       '{} has been un-skipped.'.format(member.display_name))
+      
+  await ctx.message.channel.send('```\n{}```'.format(sch.generate_schedule()))
 
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
