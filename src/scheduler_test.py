@@ -412,7 +412,7 @@ class SchedulerTestCase(unittest.TestCase):
         sch.skip_user(111)   # Alice skipped
         output = sch.generate_schedule()
         self.assertIn('Skipped:', output)
-        self.assertIn('Alice', output.split('Skipped:')[1])
+        self.assertIn('Aly', output.split('Skipped:')[1])
 
     def test_generate_schedule_multiple_skipped_footer(self):
         """Multiple skipped users all appear in the footer."""
@@ -421,8 +421,8 @@ class SchedulerTestCase(unittest.TestCase):
         sch.skip_user(333)   # Charlie
         output = sch.generate_schedule()
         footer = output.split('Skipped:')[1]
-        self.assertIn('Alice', footer)
-        self.assertIn('Charlie', footer)
+        self.assertIn('Aly', footer)
+        self.assertIn('Chaz', footer)
 
     def test_generate_schedule_no_footer_when_none_skipped(self):
         """No footer when no one is skipped."""

@@ -289,11 +289,12 @@ class Scheduler:
         # List any skipped users whose slot falls within the displayed window.
         start = datetime.date.fromisoformat(self.rotation_start_date)
         last_idx = (sched[-1][0] - start).days
-        skipped_names = [
-            e['name']
-            for e in self.rotation_users[:last_idx + 1]
-            if e.get('skip')
-        ]
+        skipped_names = []
+        for e in self.rotation_users[:last_idx + 1]:
+            if e.get('skip'):
+                name = util.discord_name(_make_user(e, member_map.get(e['id'])))
+                if name not in skipped_names:
+                    skipped_names.append(name)
         if skipped_names:
             table_str += '\nSkipped: {}'.format(', '.join(skipped_names))
 
