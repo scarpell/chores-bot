@@ -83,6 +83,7 @@ class Scheduler:
                     'id': int(e['id']),
                     'name': e.get('name', str(e['id'])),
                     **({'removed': True} if e.get('removed') else {}),
+                    **({'skip': True} if e.get('skip') else {}),
                 }
                 for e in rot.get('users', [])
             ]
@@ -129,6 +130,33 @@ class Scheduler:
         for entry in self.rotation_users:
             if entry['id'] in user_ids and entry.get('removed'):
                 del entry['removed']
+
+    def skip_user(self, user_id: int) -> bool:
+        """Toggle the skip flag on a user's next upcoming rotation slot.
+
+        Finds the first rotation entry for user_id that is not already
+        marked removed and toggles its skip flag.  A skipped entry is
+        excluded from the printable schedule for exactly that one turn.
+        Running skip_user again on the same user clears the flag.
+
+        Returns:
+          True  — user was skipped.
+          False — user was un-skipped.
+
+        Raises ValueError if the user has no upcoming (non-removed) slot.
+        """
+        for entry in self.rotation_users:
+            if entry['id'] == user_id and not entry.get('removed', False):
+                if entry.get('skip', False):
+                    del entry['skip']
+                    self.save_state()
+                    return False  # un-skipped
+                else:
+                    entry['skip'] = True
+                    self.save_state()
+                    return True   # skipped
+        raise ValueError(
+            'No upcoming rotation slot found for user {}.'.format(user_id))
 
     def _compute_extension_index(self) -> int:
         """Find where to resume the round-robin from the last visible entry."""
@@ -195,7 +223,7 @@ class Scheduler:
     # ------------------------------------------------------------------
 
     def printable_schedule(self):
-        """Return the rotation with removed entries filtered out.
+        """Return the rotation with removed and skipped entries filtered out.
 
         Each item is a (date, entry) tuple where date is the calendar day
         that entry is assigned.  The list preserves rotation order.
@@ -204,15 +232,15 @@ class Scheduler:
         return [
             (start + datetime.timedelta(days=i), e)
             for i, e in enumerate(self.rotation_users)
-            if not e.get('removed', False)
+            if not (e.get('removed') or e.get('skip'))
         ]
 
     @property
     def on_call(self) -> Optional[object]:
-        """Today's assigned user, or None if today's slot is removed.
+        """Today's assigned user, or None if today's slot is removed or skipped.
 
         Generates the printable schedule and selects the first entry.
-        If that entry's date is not today (today is a removed gap),
+        If that entry's date is not today (today is a removed/skipped gap),
         returns None — no one is on call.
         """
         sched = self.printable_schedule()

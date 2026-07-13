@@ -328,6 +328,84 @@ class SchedulerTestCase(unittest.TestCase):
         self.assertTrue(charlie_on_disk)
         self.assertTrue(all(e.get('removed') for e in charlie_on_disk))
 
+    # ------------------------------------------------------------------
+    # Skip
+    # ------------------------------------------------------------------
+
+    def test_skip_sets_flag_on_first_slot(self):
+        """skip_user sets skip=True on the first non-removed entry for that user."""
+        sch = self.make_scheduler()
+        result = sch.skip_user(333)   # Charlie is at index 2
+        self.assertTrue(result)       # returns True (was skipped)
+        self.assertTrue(sch.rotation_users[2].get('skip'))
+
+    def test_skip_toggle_clears_flag(self):
+        """Calling skip_user twice clears the flag."""
+        sch = self.make_scheduler()
+        sch.skip_user(333)
+        result = sch.skip_user(333)
+        self.assertFalse(result)      # returns False (was un-skipped)
+        self.assertFalse(sch.rotation_users[2].get('skip'))
+
+    def test_skip_only_affects_first_slot(self):
+        """Only the first upcoming slot is skipped; later slots are untouched."""
+        sch = self.make_scheduler()
+        for _ in range(5):
+            sch._extend_rotation_by_one()   # add A,B,C,D,E again
+        sch.skip_user(333)
+        charlie_entries = [e for e in sch.rotation_users if e['id'] == 333]
+        skipped = [e for e in charlie_entries if e.get('skip')]
+        not_skipped = [e for e in charlie_entries if not e.get('skip')]
+        self.assertEqual(len(skipped), 1)
+        self.assertGreaterEqual(len(not_skipped), 1)
+
+    def test_skip_raises_if_no_slot(self):
+        sch = self.make_scheduler()
+        sch.rotation_users = []
+        with self.assertRaises(ValueError):
+            sch.skip_user(333)
+
+    def test_skip_excluded_from_printable_schedule(self):
+        """A skipped entry does not appear in the printable schedule."""
+        sch = self.make_scheduler()
+        sch.skip_user(111)   # Alice is at index 0 (today)
+        ids = [e['id'] for _, e in sch.printable_schedule()]
+        # Alice should not be first
+        self.assertNotEqual(ids[0], 111)
+
+    def test_skip_today_means_no_one_on_call(self):
+        """If today's slot is skipped, on_call returns None."""
+        sch = self.make_scheduler()
+        sch.skip_user(111)   # Alice has today (index 0)
+        self.assertIsNone(sch.on_call)
+
+    def test_skip_flag_persisted_on_disk(self):
+        sch = self.make_scheduler()
+        sch.skip_user(333)
+        with open(self.state_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        charlie_slots = [e for e in data['rotation']['users'] if e['id'] == 333]
+        self.assertTrue(any(e.get('skip') for e in charlie_slots))
+
+    def test_skip_flag_survives_load_state(self):
+        """skip=True is preserved when the state file is reloaded."""
+        sch = self.make_scheduler()
+        sch.skip_user(333)
+
+        sch2 = self.make_scheduler()   # re-loads from disk
+        charlie_entries = [e for e in sch2.rotation_users if e['id'] == 333]
+        self.assertTrue(any(e.get('skip') for e in charlie_entries))
+
+    def test_generate_schedule_skips_skipped_slot(self):
+        """generate_schedule does not show a skipped user in their skipped slot."""
+        sch = self.make_scheduler()
+        sch.skip_user(111)   # skip Alice's slot today
+        output = sch.generate_schedule()
+        lines = [l for l in output.splitlines() if l.startswith('|')]
+        first_col = lines[-1].split('|')[1].strip()
+        self.assertNotIn('Alice', first_col)
+        self.assertNotIn('Aly', first_col)
+
 
 if __name__ == '__main__':
     unittest.main()

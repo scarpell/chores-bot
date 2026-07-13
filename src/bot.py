@@ -84,7 +84,7 @@ def sync_users():
   if sch is None:
     return
   users = get_chore_members()
-  if users is not None:
+  if users:   # None (config error) or [] (no members) — skip reload
     sch.load_state(users)
 
 
@@ -111,9 +111,9 @@ async def on_ready():
 
   # 1. Fetch current members from Discord
   users = get_chore_members()
-  if users is None:
-    logger.error("Failed to fetch chore members during startup.")
-    users = []
+  if not users:
+    logger.error('No members with the chore role found; bot will not start.')
+    return
 
   # 2. Load (or initialize) all schedule state from disk.
   # Only construct the Scheduler once — on reconnect, reuse the existing
@@ -143,10 +143,24 @@ async def on_call_today(ctx):
   await ctx.message.channel.send(
     '<@{}> is responsible for the dishes today!'.format(user.id))
 
-  
 @bot.command(name='schedule', help='List the schedule for the seven days')
 async def schedule(ctx):
   await ctx.message.channel.send('```{}```'.format(sch.generate_schedule()))
+
+
+@bot.command(name='skip', help='Toggle skip for a member\'s next rotation slot')
+async def cmd_skip(ctx, member: discord.Member):
+  try:
+    skipped = sch.skip_user(member.id)
+  except ValueError as e:
+    await ctx.message.channel.send(str(e))
+    return
+  if skipped:
+    await ctx.message.channel.send(
+      '{} will be skipped for their next turn.'.format(member.display_name))
+  else:
+    await ctx.message.channel.send(
+      '{} has been un-skipped.'.format(member.display_name))
 
 
 @tasks.loop(**NOTIFICATION_FREQUENCY)
